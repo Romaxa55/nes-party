@@ -1,0 +1,431 @@
+:root {
+  --bg: #12131a;
+  --panel: #1b1d27;
+  --panel-2: #232635;
+  --line: #2f3345;
+  --text: #e8eaf2;
+  --muted: #8f96ad;
+  --accent: #6ea8ff;
+  --great: #48d597;
+  --good: #7ed957;
+  --tight: #ffb454;
+  --fail: #ff6b6b;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+}
+
+#app {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px
+    max(16px, env(safe-area-inset-bottom));
+}
+
+.screen[hidden] {
+  display: none;
+}
+
+h1 {
+  font-size: 28px;
+  margin: 8px 0 4px;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  font-size: 19px;
+  margin: 8px 0 12px;
+  font-weight: 600;
+}
+
+.lede {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0 0 20px;
+  font-size: 15px;
+}
+
+.fineprint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.error {
+  color: var(--fail);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* --- выбор ROM --- */
+
+#drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 148px;
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  cursor: pointer;
+  padding: 20px;
+  text-align: center;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+#drop strong {
+  font-size: 17px;
+}
+
+#drop span {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+#drop.over {
+  border-color: var(--accent);
+  background: var(--panel-2);
+}
+
+/* --- прогресс --- */
+
+.progress {
+  height: 8px;
+  background: var(--panel-2);
+  border-radius: 99px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+#run-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 99px;
+  transition: width 0.12s linear;
+}
+
+/* --- экран NES --- */
+
+.nes-screen {
+  display: block;
+  width: 100%;
+  max-width: 512px;
+  margin: 16px auto;
+  aspect-ratio: 256 / 240;
+  background: #000;
+  border-radius: 8px;
+  image-rendering: pixelated;
+  touch-action: none;
+}
+
+/* --- вердикт --- */
+
+.verdict {
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 18px;
+  background: var(--panel);
+  border-left: 5px solid var(--muted);
+}
+
+.verdict h2 {
+  margin: 0 0 8px;
+  font-size: 21px;
+}
+
+.verdict p {
+  margin: 0 0 8px;
+  line-height: 1.55;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.verdict .rollback {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 0;
+}
+
+.verdict.great {
+  border-left-color: var(--great);
+}
+.verdict.good {
+  border-left-color: var(--good);
+}
+.verdict.tight {
+  border-left-color: var(--tight);
+}
+.verdict.fail {
+  border-left-color: var(--fail);
+}
+
+.verdict.great h2 {
+  color: var(--great);
+}
+.verdict.good h2 {
+  color: var(--good);
+}
+.verdict.tight h2 {
+  color: var(--tight);
+}
+.verdict.fail h2 {
+  color: var(--fail);
+}
+
+/* --- таблица --- */
+
+.table-wrap {
+  overflow-x: auto;
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 4px 12px 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+th {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 10px 3px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+th:first-child,
+td:first-child {
+  text-align: left;
+  /* Числовые колонки узкие и фиксированные — всё остальное место
+     забирает название этапа вместе с пояснением. */
+  width: 100%;
+  padding-right: 10px;
+}
+
+td {
+  text-align: right;
+  padding: 9px 3px;
+  border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--mono);
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+td:first-child {
+  font-family: inherit;
+  line-height: 1.35;
+  font-size: 14px;
+}
+
+td .note {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 3px;
+  white-space: normal;
+}
+
+tr.headline td {
+  font-weight: 700;
+  background: rgba(110, 168, 255, 0.07);
+}
+
+.extra {
+  margin: 16px 0;
+  padding: 14px 16px;
+  background: var(--panel);
+  border-radius: 12px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.extra b {
+  color: var(--text);
+  font-family: var(--mono);
+}
+
+/* --- кнопки --- */
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+button {
+  font: inherit;
+  border-radius: 10px;
+  padding: 13px 18px;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-height: 48px;
+}
+
+button.primary {
+  background: var(--accent);
+  color: #0b1020;
+  border-color: transparent;
+}
+
+button.ghost {
+  background: var(--panel);
+  color: var(--text);
+}
+
+button.small {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  min-height: 40px;
+  font-size: 14px;
+}
+
+.device {
+  margin-top: 22px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-family: var(--mono);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+/* --- живой режим --- */
+
+.live-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.live-stats {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pad {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin: 8px 0 14px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.dpad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  width: 168px;
+  height: 168px;
+  flex: 0 0 auto;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.cell.key {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.face {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 18px;
+}
+
+.sys {
+  display: flex;
+  gap: 10px;
+}
+
+.pill {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  padding: 9px 14px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.ab {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.round {
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 19px;
+}
+
+/* В альбомной ориентации на телефоне экран низкий — ужимаем геймпад. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .nes-screen {
+    max-width: 300px;
+    margin: 8px auto;
+  }
+  .dpad {
+    width: 132px;
+    height: 132px;
+  }
+  .round {
+    width: 56px;
+    height: 56px;
+  }
+}
