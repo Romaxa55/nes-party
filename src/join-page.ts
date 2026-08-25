@@ -7,6 +7,8 @@ import {
   attachStick,
   InputAggregator,
 } from "./controls";
+import { setupChatPanel, type ChatPanel } from "./chat-ui";
+import { VoiceClient } from "./voice";
 
 const screenJoin = $("screen-join");
 const screenPlay = $("screen-play");
@@ -15,11 +17,18 @@ const connectBtn = $<HTMLButtonElement>("connect");
 const joinError = $("join-error");
 const joinStatus = $("join-status");
 const playStatus = $("play-status");
+const pingEl = $("ping");
+const rosterEl = $("roster");
 const soundBtn = $<HTMLButtonElement>("sound-btn");
+const micBtn = $<HTMLButtonElement>("mic-btn");
 const video = $<HTMLVideoElement>("stream-video");
 
 let connecting = false;
 let detachInputs: Array<() => void> = [];
+// Чат-панель одна на страницу; отправитель переключается на живую сессию.
+let chat: ChatPanel | null = null;
+let chatSend: (text: string) => void = () => {};
+let voice: VoiceClient | null = null;
 
 // Код из ссылки вида join.html?c=ABCDE — сразу в поле.
 const fromLink = new URLSearchParams(location.search).get("c");
@@ -39,6 +48,20 @@ soundBtn.addEventListener("click", () => {
 });
 
 setupFullscreenButton($("fs-btn"));
+
+micBtn.addEventListener("click", async () => {
+  if (!voice) return; // ещё не подключены
+  micBtn.disabled = true;
+  try {
+    if (voice.active) voice.disable();
+    else await voice.enable();
+    micBtn.textContent = voice.active ? "Mic: on" : "Mic: off";
+  } catch {
+    micBtn.textContent = "Mic blocked";
+  } finally {
+    micBtn.disabled = false;
+  }
+});
 
 async function connect(): Promise<void> {
   if (connecting) return;
@@ -69,6 +92,23 @@ async function connect(): Promise<void> {
   screenJoin.hidden = true;
   screenPlay.hidden = false;
   window.scrollTo(0, 0);
+
+  if (!chat) chat = setupChatPanel((text) => chatSend(text));
+  chatSend = (text) => session.sendChat(text);
+  session.onChat = (from, text) => chat?.addMessage(from, text);
+  session.onRtt = (ms) => {
+    pingEl.textContent = `${ms} ms`;
+  };
+  session.onRoster = (l) => {
+    const parts: string[] = [];
+    if (l.some((e) => e.s === 1)) parts.push("P1");
+    if (l.some((e) => e.s === 2)) parts.push("P2");
+    const specs = l.filter((e) => e.s === 0).length;
+    if (specs) parts.push(`${specs} watching`);
+    rosterEl.textContent = parts.length ? `In room: ${parts.join(", ")}` : "";
+  };
+  voice = new VoiceClient((mic) => session.callVoice(mic));
+  micBtn.textContent = "Mic: off";
 
   // Стрим мог прийти раньше подписки — сеттер в ClientSession отдаст его сразу.
   session.onStream = (stream) => {
@@ -106,11 +146,15 @@ async function connect(): Promise<void> {
   session.onSlotChange = onSlot;
 
   session.onClose = () => {
+    voice?.disable();
+    voice = null;
+    micBtn.textContent = "Mic: off";
     // Снять игровые обработчики обязательно: глобальный keydown иначе
     // перехватывал бы буквы кода комнаты (WASD/KJXZ входят в его алфавит).
     detachAll();
     session.destroy();
     video.srcObject = null;
+    pingEl.textContent = "–";
     screenPlay.hidden = true;
     screenJoin.hidden = false;
     connectBtn.disabled = false;

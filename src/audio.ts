@@ -76,6 +76,11 @@ export class AudioPipe {
   /** Аудиодорожка для WebRTC-трансляции. */
   readonly stream: MediaStream;
 
+  /** Живой AudioContext — его переиспользует голосовой микшер. */
+  get context(): AudioContext {
+    return this.ctx;
+  }
+
   private pending: Float32Array;
   private pendingFrames = 0;
   private workletLevel = 0;
