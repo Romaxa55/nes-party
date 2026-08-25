@@ -86,6 +86,7 @@ interface HostPeer {
 export class HostSession {
   private peers = new Map<string, HostPeer>();
   private stream: MediaStream | null = null;
+  private hostPlays = true;
 
   /** Ввод от сетевого игрока: слот и маска кнопок. */
   onInput: (slot: 1 | 2, mask: ButtonMask) => void = () => {};
@@ -155,6 +156,7 @@ export class HostSession {
       this.peers.delete(conn.peer);
       if (hp.slot !== 0) this.onInput(hp.slot, 0); // отпустить кнопки
       hp.call?.close();
+      this.rebalance(); // освободившийся контроллер — первому зрителю
       this.emitPeers();
     };
     conn.on("close", drop);
@@ -173,15 +175,7 @@ export class HostSession {
       return;
     }
 
-    let slot: Slot;
-    if (existing) {
-      slot = existing.slot;
-    } else {
-      // Хост всегда играет за P1; первый подключившийся получает P2,
-      // остальные смотрят трансляцию как зрители.
-      const taken = new Set([...this.peers.values()].map((p) => p.slot));
-      slot = taken.has(2) ? 0 : 2;
-    }
+    const slot: Slot = existing ? existing.slot : this.freeSlot();
 
     const hp: HostPeer = { conn, slot, call: null };
     this.peers.set(conn.peer, hp); // до close(), чтобы drop старого не снёс запись
@@ -193,6 +187,44 @@ export class HostSession {
     conn.send({ t: "slot", p: slot } satisfies Message);
     if (this.stream) hp.call = this.peer.call(conn.peer, this.stream);
     this.emitPeers();
+  }
+
+  /**
+   * Играет ли хост сам за P1. Выключено — слот 1 отдаётся клиентам:
+   * режим «этот экран — телевизор, все игроки на телефонах».
+   */
+  setHostPlays(v: boolean): void {
+    if (this.hostPlays === v) return;
+    this.hostPlays = v;
+    if (v) {
+      for (const hp of this.peers.values()) {
+        if (hp.slot === 1) {
+          hp.slot = 0;
+          hp.conn.send({ t: "slot", p: 0 } satisfies Message);
+          this.onInput(1, 0); // отпустить кнопки забранного контроллера
+        }
+      }
+    }
+    this.rebalance();
+    this.emitPeers();
+  }
+
+  private freeSlot(): Slot {
+    const taken = new Set([...this.peers.values()].map((p) => p.slot));
+    if (!this.hostPlays && !taken.has(1)) return 1;
+    if (!taken.has(2)) return 2;
+    return 0;
+  }
+
+  /** Повышает зрителей на освободившиеся контроллеры, в порядке входа. */
+  private rebalance(): void {
+    for (const hp of this.peers.values()) {
+      if (hp.slot !== 0) continue;
+      const give = this.freeSlot();
+      if (give === 0) break;
+      hp.slot = give;
+      hp.conn.send({ t: "slot", p: give } satisfies Message);
+    }
   }
 
   private emitPeers(): void {
@@ -218,6 +250,8 @@ export class ClientSession {
   slot: Slot | null = null;
 
   onClose: () => void = () => {};
+  /** Хост может пересадить на другой слот уже после подключения. */
+  onSlotChange: (slot: Slot) => void = () => {};
 
   // Медиапоток может прийти раньше, чем страница успеет подписаться, —
   // буферизуем последний и отдаём при назначении обработчика.
@@ -275,11 +309,15 @@ export class ClientSession {
       conn.on("open", () => conn.send({ t: "hello" } satisfies Message));
       conn.on("data", (raw) => {
         const msg = raw as Message;
-        if (msg?.t === "slot" && !settled) {
-          settled = true;
-          clearTimeout(timer);
+        if (msg?.t === "slot") {
           session.slot = msg.p;
-          resolve(session);
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve(session);
+          } else {
+            session.onSlotChange(msg.p);
+          }
         } else if (msg?.t === "full") {
           fail(new Error("В комнате нет свободных мест."));
         }

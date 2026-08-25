@@ -63,10 +63,8 @@ async function connect(): Promise<void> {
   screenPlay.hidden = false;
   window.scrollTo(0, 0);
 
-  const slot = session.slot ?? 0;
-  playStatus.textContent =
-    slot === 0 ? "Ты зритель — оба места заняты" : `Ты — Игрок ${slot}`;
-  $("pad").hidden = slot === 0;
+  applySlot(session.slot ?? 0);
+  session.onSlotChange = applySlot; // хост может пересадить на лету
 
   // Стрим мог прийти раньше подписки — сеттер в ClientSession отдаст его сразу.
   session.onStream = (stream) => {
@@ -105,4 +103,10 @@ async function connect(): Promise<void> {
 function showError(message: string): void {
   joinError.textContent = message;
   joinError.hidden = false;
+}
+
+function applySlot(slot: number): void {
+  playStatus.textContent =
+    slot === 0 ? "Ты зритель — свободных мест нет" : `Ты — Игрок ${slot}`;
+  $("pad").hidden = slot === 0;
 }

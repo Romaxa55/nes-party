@@ -18,6 +18,10 @@ const hostStats = $("host-stats");
 
 let engine: Engine | null = null;
 let started = false;
+// Играет ли хост сам за P1. Выключается чекбоксом — режим «этот экран
+// телевизор, все игроки на телефонах».
+let hostPlays = true;
+let lastPeers: PeerInfo[] = [];
 
 setupRomPicker({
   dropZone: $("drop"),
@@ -74,10 +78,24 @@ async function begin(rom: Uint8Array): Promise<void> {
     return;
   }
 
-  // Хост играет за первого: тачскрин и клавиатура складываются через OR.
-  const inputs = new InputAggregator((mask) => engine?.setButtons(1, mask));
+  // Локальный ввод (тачскрин + клавиатура через OR) идёт в P1, только пока
+  // хост играет сам.
+  const inputs = new InputAggregator((mask) => {
+    if (hostPlays) engine?.setButtons(1, mask);
+  });
   attachTouchpad($("pad"), (m) => inputs.set("touch", m));
   attachKeyboard((m) => inputs.set("kb", m));
+
+  // Чекбокс вешаем до создания комнаты: снять его можно и пока PeerJS
+  // регистрируется — применится, как только сессия появится.
+  let sessionRef: HostSession | null = null;
+  const hostPlaysBox = $<HTMLInputElement>("host-plays");
+  hostPlaysBox.addEventListener("change", () => {
+    hostPlays = hostPlaysBox.checked;
+    if (!hostPlays) engine?.setButtons(1, 0); // отпустить свои кнопки
+    sessionRef?.setHostPlays(hostPlays);
+    renderPeers(lastPeers);
+  });
 
   // Комната создаётся параллельно с игрой: хост уже играет, пока PeerJS
   // регистрируется. Если сеть недоступна — остаётся локальная игра.
@@ -91,9 +109,14 @@ async function begin(rom: Uint8Array): Promise<void> {
       `Игра работает локально; проверь интернет и обнови страницу.`;
     return;
   }
+  sessionRef = session;
+  session.setHostPlays(hostPlays); // если чекбокс сняли до регистрации
 
   session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
-  session.onPeersChange = renderPeers;
+  session.onPeersChange = (list) => {
+    lastPeers = list;
+    renderPeers(list);
+  };
   session.onError = (err) => {
     netStatus.textContent = `Сеть: ${err.message}`;
   };
@@ -183,10 +206,14 @@ async function beginFromUrl(raw: string): Promise<void> {
 }
 
 function renderPeers(list: PeerInfo[]): void {
-  const player2 = list.some((p) => p.slot === 2);
+  const p1 = list.some((p) => p.slot === 1);
+  const p2 = list.some((p) => p.slot === 2);
   const watchers = list.filter((p) => p.slot === 0).length;
+  const p1Text = hostPlays ? "P1: ты" : p1 ? "P1: телефон" : "P1: ждём";
+  const p2Text = p2 ? "P2: подключён" : "P2: ждём";
   const parts = [
-    player2 ? "Игрок 2 подключён" : "Ждём второго игрока…",
+    p1Text,
+    p2Text,
     watchers ? `зрителей: ${watchers}` : null,
   ].filter(Boolean);
   players.textContent = parts.join(" · ");

@@ -504,6 +504,22 @@ a {
   font-size: 14px;
 }
 
+.host-plays {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin: 4px 0 8px;
+  cursor: pointer;
+}
+
+.host-plays input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
 /* Тачпад хоста нужен, только если хост — телефон. На устройствах
    с мышью прячем: там играют с клавиатуры. */
 @media (pointer: fine) {
