@@ -39,13 +39,19 @@ class NesAudioProcessor extends AudioWorkletProcessor {
   process(inputs, outputs) {
     const out = outputs[0];
     const L = out[0];
-    const R = out.length > 1 ? out[1] : out[0];
+    const stereo = out.length > 1;
+    const R = stereo ? out[1] : L;
     if (!this.primed && this.level >= 3072) this.primed = true; // ~70 мс запаса
     for (let i = 0; i < L.length; i++) {
       if (this.primed && this.level > 0) {
         const r = this.read * 2;
-        L[i] = this.buf[r];
-        R[i] = this.buf[r + 1];
+        if (stereo) {
+          L[i] = this.buf[r];
+          R[i] = this.buf[r + 1];
+        } else {
+          // Моно-выход: миксуем каналы, а не затираем левый правым.
+          L[i] = (this.buf[r] + this.buf[r + 1]) * 0.5;
+        }
         this.read = (this.read + 1) % this.capacity;
         this.level--;
       } else {

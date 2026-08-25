@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -15,10 +16,10 @@ export default defineConfig({
     rollupOptions: {
       // Четыре независимые страницы: лендинг, хост, клиент, бенчмарк.
       input: {
-        index: new URL("index.html", import.meta.url).pathname,
-        host: new URL("host.html", import.meta.url).pathname,
-        join: new URL("join.html", import.meta.url).pathname,
-        bench: new URL("bench.html", import.meta.url).pathname,
+        index: fileURLToPath(new URL("index.html", import.meta.url)),
+        host: fileURLToPath(new URL("host.html", import.meta.url)),
+        join: fileURLToPath(new URL("join.html", import.meta.url)),
+        bench: fileURLToPath(new URL("bench.html", import.meta.url)),
       },
     },
   },

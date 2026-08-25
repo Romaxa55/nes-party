@@ -149,9 +149,16 @@ export function attachKeyboard(
 ): () => void {
   let mask: ButtonMask = 0;
 
+  // Ввод в поле или нажатие Enter на сфокусированной кнопке — не игра:
+  // иначе WASD нельзя набрать в поле кода, а Enter «жмёт» Start вместо кнопки.
+  function isUiTarget(e: KeyboardEvent): boolean {
+    const t = e.target as HTMLElement | null;
+    return !!t?.closest("input, textarea, select, button, a");
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     const name = KEYBOARD_MAP[e.code];
-    if (!name) return;
+    if (!name || isUiTarget(e)) return;
     e.preventDefault();
     const next = mask | BIT_BY_NAME[name];
     if (next !== mask) onState((mask = next));
@@ -159,7 +166,7 @@ export function attachKeyboard(
 
   function onKeyUp(e: KeyboardEvent): void {
     const name = KEYBOARD_MAP[e.code];
-    if (!name) return;
+    if (!name || isUiTarget(e)) return;
     e.preventDefault();
     const next = mask & ~BIT_BY_NAME[name];
     if (next !== mask) onState((mask = next));

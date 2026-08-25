@@ -17,6 +17,7 @@ const players = $("players");
 const hostStats = $("host-stats");
 
 let engine: Engine | null = null;
+let started = false;
 
 setupRomPicker({
   dropZone: $("drop"),
@@ -30,12 +31,15 @@ setupRomPicker({
 });
 
 async function begin(rom: Uint8Array): Promise<void> {
+  if (started) return;
+  started = true;
+  pickError.hidden = true;
   screenPick.hidden = true;
   screenGame.hidden = false;
   window.scrollTo(0, 0);
 
-  // AudioContext создаётся здесь, в цепочке жеста пользователя (клик по
-  // выбору файла) — иначе браузер не даст звук. Если не вышло — играем без.
+  // AudioContext создаётся в цепочке жеста пользователя — иначе браузер
+  // не даст звук. Если не вышло — играем без него.
   let audio: AudioPipe | null = null;
   try {
     audio = await AudioPipe.create();
@@ -44,16 +48,31 @@ async function begin(rom: Uint8Array): Promise<void> {
   }
 
   const canvas = $<HTMLCanvasElement>("game-canvas");
-  engine = startEngine({
-    rom,
-    canvas,
-    audio,
-    onStats: (s) => {
-      hostStats.textContent =
-        `${s.fps.toFixed(0)} fps · кадр ${ms(s.frameMs)} мс` +
-        (s.droppedSteps ? ` · пропущено ${s.droppedSteps}` : "");
-    },
-  });
+  try {
+    engine = startEngine({
+      rom,
+      canvas,
+      audio,
+      onStats: (s) => {
+        hostStats.textContent =
+          `${s.fps.toFixed(0)} fps · кадр ${ms(s.frameMs)} мс` +
+          (s.droppedSteps ? ` · пропущено ${s.droppedSteps}` : "");
+      },
+      onError: (err) => {
+        netStatus.textContent = `Эмулятор упал: ${err.message}. Обнови страницу.`;
+        void audio?.close().catch(() => {});
+      },
+    });
+  } catch (err) {
+    // Валидный iNES, но маппер не поддержан ядром — честно возвращаем выбор.
+    void audio?.close().catch(() => {});
+    started = false;
+    screenGame.hidden = true;
+    screenPick.hidden = false;
+    pickError.textContent = `Ядро не запустило игру: ${(err as Error).message}`;
+    pickError.hidden = false;
+    return;
+  }
 
   // Хост играет за первого: тачскрин и клавиатура складываются через OR.
   const inputs = new InputAggregator((mask) => engine?.setButtons(1, mask));
@@ -75,19 +94,33 @@ async function begin(rom: Uint8Array): Promise<void> {
 
   session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
   session.onPeersChange = renderPeers;
+  session.onError = (err) => {
+    netStatus.textContent = `Сеть: ${err.message}`;
+  };
 
   // Трансляция: картинка с canvas + звуковая дорожка из AudioPipe.
-  const stream = canvas.captureStream(60);
-  if (audio) {
-    for (const track of audio.stream.getAudioTracks()) stream.addTrack(track);
+  let streamOk = true;
+  try {
+    const stream = canvas.captureStream(60);
+    if (audio) {
+      for (const track of audio.stream.getAudioTracks()) stream.addTrack(track);
+    }
+    session.setStream(stream);
+  } catch {
+    streamOk = false;
   }
-  session.setStream(stream);
 
   roomCode.textContent = session.code;
   const link = new URL(`join.html?c=${session.code}`, location.href).toString();
-  netStatus.textContent = audio
-    ? "Комната открыта. Отправь другу код или ссылку."
-    : "Комната открыта (звук не завёлся — играем без него).";
+  if (!streamOk) {
+    netStatus.textContent =
+      "Комната открыта, но браузер не отдаёт видео с canvas — " +
+      "клиенты подключатся без картинки. Попробуй другой браузер.";
+  } else {
+    netStatus.textContent = audio
+      ? "Комната открыта. Отправь другу код или ссылку."
+      : "Комната открыта (звук не завёлся — играем без него).";
+  }
 
   copyLink.hidden = false;
   copyLink.addEventListener("click", async () => {
@@ -100,7 +133,8 @@ async function begin(rom: Uint8Array): Promise<void> {
     setTimeout(() => (copyLink.textContent = "Скопировать ссылку"), 2500);
   });
 
-  window.addEventListener("beforeunload", () => session.destroy());
+  // pagehide надёжнее beforeunload на мобильных браузерах.
+  window.addEventListener("pagehide", () => session.destroy());
 }
 
 function renderPeers(list: PeerInfo[]): void {
