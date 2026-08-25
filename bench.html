@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -11,27 +11,28 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312131a'/%3E%3Cpath d='M6 3h4v3h3v4h-3v3H6v-3H3V6h3z' fill='%236ea8ff'/%3E%3C/svg%3E"
     />
-    <title>NES Bench — тянет ли телефон эмуляцию</title>
+    <title>NES Bench — can this device emulate at 60 fps</title>
   </head>
   <body>
     <main id="app">
-      <!-- Экран 1: выбор ROM -->
+      <!-- Screen 1: ROM picker -->
       <section id="screen-pick" class="screen">
         <h1>NES Bench</h1>
         <p class="lede">
-          Замер: тянет ли этот телефон эмуляцию NES на JavaScript в 60 кадров.
-          От результата зависит, хватит ли JS-ядра или нужен WASM.
+          Measures whether this device can emulate the NES in JavaScript at
+          60 fps. The result decides if the JS core is enough or WASM is
+          needed.
         </p>
 
         <label id="drop" for="rom-input">
-          <strong>Выбрать файл .nes</strong>
-          <span>или перетащить сюда</span>
+          <strong>Pick a .nes file</strong>
+          <span>or drop it here</span>
         </label>
         <input id="rom-input" type="file" accept=".nes" hidden />
 
         <p class="fineprint">
-          Файл никуда не отправляется — он читается прямо в браузере и остаётся
-          на устройстве. <a href="./">На главную</a>
+          The file is never uploaded — it is read right in the browser and
+          stays on the device. <a href="./">Home</a>
         </p>
 
         <p id="pick-error" class="error" hidden></p>
@@ -40,9 +41,9 @@
         <div id="device-info" class="device"></div>
       </section>
 
-      <!-- Экран 2: идёт замер -->
+      <!-- Screen 2: running -->
       <section id="screen-run" class="screen" hidden>
-        <h2 id="run-stage">Подготовка</h2>
+        <h2 id="run-stage">Preparing</h2>
         <div class="progress"><div id="run-bar"></div></div>
         <p id="run-detail" class="fineprint"></p>
         <canvas
@@ -52,22 +53,22 @@
           class="nes-screen"
         ></canvas>
         <p class="fineprint">
-          Эмулятор сам нажимает Start и A, чтобы проскочить заставку и мерить
-          на настоящем геймплее, а не на статичном логотипе.
+          The emulator presses Start and A by itself to skip the title
+          screen and measure real gameplay, not a static logo.
         </p>
       </section>
 
-      <!-- Экран 3: результаты -->
+      <!-- Screen 3: results -->
       <section id="screen-result" class="screen" hidden>
         <div id="verdict" class="verdict"></div>
         <div id="table-wrap" class="table-wrap">
           <table id="result-table">
             <thead>
               <tr>
-                <th>Что меряем</th>
-                <th>средн.</th>
+                <th>Stage</th>
+                <th>avg</th>
                 <th>p95</th>
-                <th>худш.</th>
+                <th>worst</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -75,17 +76,17 @@
         </div>
         <div id="extra" class="extra"></div>
         <div class="actions">
-          <button id="go-live" class="primary">Живой режим</button>
-          <button id="copy-result" class="ghost">Скопировать результат</button>
-          <button id="restart" class="ghost">Другой ROM</button>
+          <button id="go-live" class="primary">Live mode</button>
+          <button id="copy-result" class="ghost">Copy result</button>
+          <button id="restart" class="ghost">Another ROM</button>
         </div>
         <div id="device-info-2" class="device"></div>
       </section>
 
-      <!-- Экран 4: живой режим -->
+      <!-- Screen 4: live mode -->
       <section id="screen-live" class="screen live" hidden>
         <div class="live-top">
-          <button id="live-back" class="ghost small">Назад</button>
+          <button id="live-back" class="ghost small">Back</button>
           <div id="live-stats" class="live-stats">—</div>
         </div>
         <canvas
@@ -118,8 +119,8 @@
           </div>
         </div>
         <p class="fineprint">
-          Звук в замере отключён намеренно — его стоимость показана отдельной
-          строкой в таблице. На клавиатуре: стрелки, K и J, Enter.
+          Sound is intentionally off in the benchmark — its cost is a
+          separate row in the table. Keyboard: arrows, K and J, Enter.
         </p>
       </section>
     </main>

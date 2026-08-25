@@ -39,7 +39,7 @@ export function startEngine(opts: {
   onError?: (err: Error) => void;
 }): Engine {
   const ctx = opts.canvas.getContext("2d", { alpha: false });
-  if (!ctx) throw new Error("2D-контекст недоступен");
+  if (!ctx) throw new Error("2D canvas context unavailable");
   const blit = createBlitter(ctx);
   const audio = opts.audio ?? null;
 

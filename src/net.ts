@@ -86,6 +86,7 @@ interface HostPeer {
 export class HostSession {
   private peers = new Map<string, HostPeer>();
   private stream: MediaStream | null = null;
+  private hostPlays = true;
 
   /** Ввод от сетевого игрока: слот и маска кнопок. */
   onInput: (slot: 1 | 2, mask: ButtonMask) => void = () => {};
@@ -112,7 +113,7 @@ export class HostSession {
    * Коллизия кода (unavailable-id) — пробуем следующий, до пяти раз.
    */
   static async create(): Promise<HostSession> {
-    let lastError: Error = new Error("не удалось создать комнату");
+    let lastError: Error = new Error("failed to create a room");
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = randomCode();
       try {
@@ -155,6 +156,7 @@ export class HostSession {
       this.peers.delete(conn.peer);
       if (hp.slot !== 0) this.onInput(hp.slot, 0); // отпустить кнопки
       hp.call?.close();
+      this.rebalance(); // освободившийся контроллер — первому зрителю
       this.emitPeers();
     };
     conn.on("close", drop);
@@ -173,15 +175,7 @@ export class HostSession {
       return;
     }
 
-    let slot: Slot;
-    if (existing) {
-      slot = existing.slot;
-    } else {
-      // Хост всегда играет за P1; первый подключившийся получает P2,
-      // остальные смотрят трансляцию как зрители.
-      const taken = new Set([...this.peers.values()].map((p) => p.slot));
-      slot = taken.has(2) ? 0 : 2;
-    }
+    const slot: Slot = existing ? existing.slot : this.freeSlot();
 
     const hp: HostPeer = { conn, slot, call: null };
     this.peers.set(conn.peer, hp); // до close(), чтобы drop старого не снёс запись
@@ -193,6 +187,44 @@ export class HostSession {
     conn.send({ t: "slot", p: slot } satisfies Message);
     if (this.stream) hp.call = this.peer.call(conn.peer, this.stream);
     this.emitPeers();
+  }
+
+  /**
+   * Играет ли хост сам за P1. Выключено — слот 1 отдаётся клиентам:
+   * режим «этот экран — телевизор, все игроки на телефонах».
+   */
+  setHostPlays(v: boolean): void {
+    if (this.hostPlays === v) return;
+    this.hostPlays = v;
+    if (v) {
+      for (const hp of this.peers.values()) {
+        if (hp.slot === 1) {
+          hp.slot = 0;
+          hp.conn.send({ t: "slot", p: 0 } satisfies Message);
+          this.onInput(1, 0); // отпустить кнопки забранного контроллера
+        }
+      }
+    }
+    this.rebalance();
+    this.emitPeers();
+  }
+
+  private freeSlot(): Slot {
+    const taken = new Set([...this.peers.values()].map((p) => p.slot));
+    if (!this.hostPlays && !taken.has(1)) return 1;
+    if (!taken.has(2)) return 2;
+    return 0;
+  }
+
+  /** Повышает зрителей на освободившиеся контроллеры, в порядке входа. */
+  private rebalance(): void {
+    for (const hp of this.peers.values()) {
+      if (hp.slot !== 0) continue;
+      const give = this.freeSlot();
+      if (give === 0) break;
+      hp.slot = give;
+      hp.conn.send({ t: "slot", p: give } satisfies Message);
+    }
   }
 
   private emitPeers(): void {
@@ -218,6 +250,8 @@ export class ClientSession {
   slot: Slot | null = null;
 
   onClose: () => void = () => {};
+  /** Хост может пересадить на другой слот уже после подключения. */
+  onSlotChange: (slot: Slot) => void = () => {};
 
   // Медиапоток может прийти раньше, чем страница успеет подписаться, —
   // буферизуем последний и отдаём при назначении обработчика.
@@ -248,7 +282,12 @@ export class ClientSession {
         reject(err);
       };
       const timer = setTimeout(
-        () => fail(new Error("Хост не ответил. Проверь код и что игра запущена.")),
+        () =>
+          fail(
+            new Error(
+              "The host did not respond. Check the code and that the game is running.",
+            ),
+          ),
         CONNECT_TIMEOUT_MS,
       );
 
@@ -256,8 +295,8 @@ export class ClientSession {
         const type = (err as { type?: string }).type;
         fail(
           type === "peer-unavailable"
-            ? new Error("Комната не найдена. Проверь код.")
-            : new Error(`Сеть: ${(err as Error).message}`),
+            ? new Error("Room not found. Check the code.")
+            : new Error(`Network: ${(err as Error).message}`),
         );
       });
 
@@ -267,7 +306,7 @@ export class ClientSession {
       });
       // В состоянии disconnected peerjs возвращает undefined вопреки тайпингам.
       if (!conn) {
-        fail(new Error("Соединение не создалось — обнови страницу."));
+        fail(new Error("Could not create a connection — reload the page."));
         return;
       }
       const session = new ClientSession(peer, conn);
@@ -275,21 +314,25 @@ export class ClientSession {
       conn.on("open", () => conn.send({ t: "hello" } satisfies Message));
       conn.on("data", (raw) => {
         const msg = raw as Message;
-        if (msg?.t === "slot" && !settled) {
-          settled = true;
-          clearTimeout(timer);
+        if (msg?.t === "slot") {
           session.slot = msg.p;
-          resolve(session);
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            resolve(session);
+          } else {
+            session.onSlotChange(msg.p);
+          }
         } else if (msg?.t === "full") {
-          fail(new Error("В комнате нет свободных мест."));
+          fail(new Error("No free seats in this room."));
         }
       });
       conn.on("close", () => {
-        if (!settled) fail(new Error("Хост разорвал соединение."));
+        if (!settled) fail(new Error("The host closed the connection."));
         else session.onClose();
       });
       conn.on("error", () => {
-        if (!settled) fail(new Error("Ошибка соединения с хостом."));
+        if (!settled) fail(new Error("Connection to the host failed."));
         else session.onClose();
       });
 
@@ -346,7 +389,7 @@ function openPeer(id: string | undefined): Promise<Peer> {
       reject(err);
     };
     const timer = setTimeout(
-      () => onError(new Error("Не удалось связаться с signaling-сервером PeerJS.")),
+      () => onError(new Error("Could not reach the PeerJS signaling server.")),
       CONNECT_TIMEOUT_MS,
     );
 

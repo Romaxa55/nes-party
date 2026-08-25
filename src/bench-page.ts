@@ -60,7 +60,7 @@ async function begin(rom: Uint8Array, name: string): Promise<void> {
   const canvas = $<HTMLCanvasElement>("bench-canvas");
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) {
-    pickError.textContent = "Браузер не даёт 2D-контекст canvas.";
+    pickError.textContent = "The browser did not provide a 2D canvas context.";
     pickError.hidden = false;
     show("pick");
     return;
@@ -70,10 +70,10 @@ async function begin(rom: Uint8Array, name: string): Promise<void> {
   await new Promise((r) => requestAnimationFrame(r));
 
   const report = await runBenchmark(rom, ctx, (u) => {
-    runStage.textContent = `Этап ${u.stageIndex + 1} из ${u.stageCount}: ${u.stageLabel}`;
+    runStage.textContent = `Stage ${u.stageIndex + 1} of ${u.stageCount}: ${u.stageLabel}`;
     const overall = (u.stageIndex + u.done / u.total) / u.stageCount;
     runBar.style.width = `${(overall * 100).toFixed(1)}%`;
-    runDetail.textContent = `${u.done} из ${u.total} кадров`;
+    runDetail.textContent = `${u.done} of ${u.total} frames`;
   });
 
   render(report);
@@ -142,27 +142,27 @@ function render(report: BenchReport): void {
   const extra = $("extra");
   extra.replaceChildren(
     ...line(
-      `Бюджет кадра при 60 Гц — `,
-      `${FRAME_BUDGET_MS.toFixed(2)} мс`,
-      `. Полный цикл занимает `,
+      `Frame budget at 60 Hz is `,
+      `${FRAME_BUDGET_MS.toFixed(2)} ms`,
+      `. The full cycle uses `,
       `${used.toFixed(0)}%`,
-      ` бюджета, свободно `,
-      `${ms(FRAME_BUDGET_MS - full.avg)} мс`,
-      ` на сеть и отрисовку.`,
+      ` of it, leaving `,
+      `${ms(FRAME_BUDGET_MS - full.avg)} ms`,
+      ` for networking and rendering.`,
     ),
     document.createElement("br"),
     ...line(
-      `Снимок состояния: сохранение `,
-      `${ms(report.state.saveMs)} мс`,
-      `, восстановление `,
-      `${ms(report.state.loadMs)} мс`,
-      `, размер в JSON `,
-      `${kb} КБ`,
+      `State snapshot: save `,
+      `${ms(report.state.saveMs)} ms`,
+      `, load `,
+      `${ms(report.state.loadMs)} ms`,
+      `, JSON size `,
+      `${kb} KB`,
       `.`,
     ),
     document.createElement("br"),
     ...line(
-      `Все значения в миллисекундах, замер по ${full.frames} кадрам на игре `,
+      `All values in milliseconds, measured over ${full.frames} frames of `,
       currentName,
       `.`,
     ),
@@ -176,9 +176,9 @@ function render(report: BenchReport): void {
 function describeDevice(): string {
   const d = collectDeviceInfo();
   const parts = [
-    `Экран ${d.screen} @${d.dpr}x`,
-    d.cores ? `${d.cores} ядер` : null,
-    d.memoryGb ? `${d.memoryGb} ГБ RAM` : null,
+    `Screen ${d.screen} @${d.dpr}x`,
+    d.cores ? `${d.cores} cores` : null,
+    d.memoryGb ? `${d.memoryGb} GB RAM` : null,
   ].filter(Boolean);
   return `${parts.join(" · ")}\n${d.ua}`;
 }
@@ -193,9 +193,9 @@ function reportAsText(report: BenchReport): string {
     `NES Bench — ${currentName}`,
     describeDevice().replace("\n", " | "),
     "",
-    `Вердикт: ${verdict.title}`,
+    `Verdict: ${verdict.title}`,
     "",
-    "Этап                          средн.    p95   худш.",
+    "Stage                            avg    p95   worst",
   ];
   for (const s of report.stages) {
     lines.push(
@@ -204,8 +204,8 @@ function reportAsText(report: BenchReport): string {
   }
   lines.push(
     "",
-    `Снимок состояния: save ${ms(report.state.saveMs)} мс / load ${ms(report.state.loadMs)} мс / ${(report.state.bytes / 1024).toFixed(0)} КБ`,
-    `Бюджет кадра ${FRAME_BUDGET_MS.toFixed(2)} мс`,
+    `State snapshot: save ${ms(report.state.saveMs)} ms / load ${ms(report.state.loadMs)} ms / ${(report.state.bytes / 1024).toFixed(0)} KB`,
+    `Frame budget ${FRAME_BUDGET_MS.toFixed(2)} ms`,
   );
   return lines.join("\n");
 }
@@ -215,11 +215,11 @@ $("copy-result").addEventListener("click", async () => {
   const button = $<HTMLButtonElement>("copy-result");
   try {
     await navigator.clipboard.writeText(reportAsText(lastReport));
-    button.textContent = "Скопировано";
+    button.textContent = "Copied";
   } catch {
-    button.textContent = "Не вышло скопировать";
+    button.textContent = "Copy failed";
   }
-  setTimeout(() => (button.textContent = "Скопировать результат"), 2000);
+  setTimeout(() => (button.textContent = "Copy result"), 2000);
 });
 
 $("restart").addEventListener("click", () => {
@@ -242,9 +242,9 @@ $("go-live").addEventListener("click", () => {
     pad: $("pad"),
     onStats: (s) => {
       stats.textContent =
-        `${s.fps.toFixed(1)} fps · кадр ${ms(s.frameMs)} мс` +
-        ` · пик ${ms(s.worstMs)} мс` +
-        (s.droppedSteps ? ` · пропущено ${s.droppedSteps}` : "");
+        `${s.fps.toFixed(1)} fps · frame ${ms(s.frameMs)} ms` +
+        ` · peak ${ms(s.worstMs)} ms` +
+        (s.droppedSteps ? ` · dropped ${s.droppedSteps}` : "");
     },
   });
 });

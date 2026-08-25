@@ -111,29 +111,29 @@ interface StageSpec {
 const STAGES: StageSpec[] = [
   {
     id: "core",
-    label: "Ядро",
-    note: "голые CPU и PPU — она же цена одного шага пересимуляции при роллбэке",
+    label: "Core",
+    note: "bare CPU and PPU — also the cost of one resimulation step under rollback",
     sound: false,
     render: false,
   },
   {
     id: "sound",
-    label: "+ звук",
-    note: "разница с предыдущей строкой — цена эмуляции APU",
+    label: "+ audio",
+    note: "difference with the previous row is the APU emulation cost",
     sound: true,
     render: false,
   },
   {
     id: "render",
-    label: "+ рендер",
-    note: "разница с первой строкой — цена конвертации кадра и putImageData",
+    label: "+ render",
+    note: "difference with the first row is frame conversion and putImageData",
     sound: false,
     render: true,
   },
   {
     id: "full",
-    label: "Полный цикл",
-    note: "то, что реально происходит в игре — главная цифра",
+    label: "Full cycle",
+    note: "what actually happens in-game — the headline number",
     sound: true,
     render: true,
   },
@@ -318,52 +318,52 @@ export function judge(report: BenchReport): Verdict {
   let rollbackNote: string;
   if (report.state.saveMs > 2 || report.state.bytes > 200_000) {
     rollbackNote =
-      `Роллбэк на этом ядре не построить, и упирается это не в скорость эмуляции. ` +
-      `Снимок состояния весит ${snapshotKb} КБ и снимается ${ms(report.state.saveMs)} мс, ` +
-      `а при откате его нужно делать каждый кадр — то есть ${saveShare.toFixed(0)}% бюджета ` +
-      `уходит впустую ещё до самой игры. jsnes тащит в снимок развёрнутые кэши тайлов, ` +
-      `хотя настоящее состояние NES — единицы килобайт. Netplay строим на задержке ввода; ` +
-      `роллбэк возможен только после переписывания состояния на плоский ArrayBuffer.`;
+      `Rollback cannot be built on this core, and emulation speed is not the reason. ` +
+      `A state snapshot weighs ${snapshotKb} KB and takes ${ms(report.state.saveMs)} ms, ` +
+      `and rollback needs one every frame — ${saveShare.toFixed(0)}% of the budget burned ` +
+      `before the game itself. jsnes drags expanded tile caches into the snapshot even ` +
+      `though the real NES state is a few kilobytes. Netplay should be delay-based; ` +
+      `rollback becomes possible only after rewriting state into a flat ArrayBuffer.`;
   } else if (rollbackWorst < FRAME_BUDGET_MS) {
     rollbackNote =
-      `Роллбэк выглядит реальным: снимок ${snapshotKb} КБ за ${ms(report.state.saveMs)} мс, ` +
-      `худший кадр с откатом на 7 шагов — около ${ms(rollbackWorst)} мс ` +
-      `при бюджете ${FRAME_BUDGET_MS.toFixed(1)} мс.`;
+      `Rollback looks feasible: a ${snapshotKb} KB snapshot in ${ms(report.state.saveMs)} ms, ` +
+      `worst-case frame with a 7-step rollback is about ${ms(rollbackWorst)} ms ` +
+      `within the ${FRAME_BUDGET_MS.toFixed(1)} ms budget.`;
   } else {
     rollbackNote =
-      `Роллбэк не проходит по времени: худший кадр с откатом на 7 шагов — около ` +
-      `${ms(rollbackWorst)} мс при бюджете ${FRAME_BUDGET_MS.toFixed(1)} мс. ` +
-      `Netplay строим на задержке ввода, а не на откате.`;
+      `Rollback does not fit the budget: worst-case frame with a 7-step rollback is ` +
+      `about ${ms(rollbackWorst)} ms against ${FRAME_BUDGET_MS.toFixed(1)} ms. ` +
+      `Netplay should be delay-based instead.`;
   }
 
   if (load <= 4) {
     return {
       grade: "great",
-      title: "Отлично — запас большой",
-      body: `Полный цикл занимает ${full.avg.toFixed(2)} мс в среднем и ${full.p95.toFixed(2)} мс в 95% кадров при бюджете ${FRAME_BUDGET_MS.toFixed(1)} мс. JS-ядра хватает с головой, WASM не нужен.`,
+      title: "Great — plenty of headroom",
+      body: `The full cycle takes ${full.avg.toFixed(2)} ms on average and ${full.p95.toFixed(2)} ms at p95 within a ${FRAME_BUDGET_MS.toFixed(1)} ms budget. The JS core is more than enough, no WASM needed.`,
       rollbackNote,
     };
   }
   if (load <= 8) {
     return {
       grade: "good",
-      title: "Хорошо — 60 fps уверенно",
-      body: `Полный цикл занимает ${full.avg.toFixed(2)} мс в среднем и ${full.p95.toFixed(2)} мс в 95% кадров при бюджете ${FRAME_BUDGET_MS.toFixed(1)} мс. Ядра хватает, остаток бюджета уходит на сеть и композитинг.`,
+      title: "Good — solid 60 fps",
+      body: `The full cycle takes ${full.avg.toFixed(2)} ms on average and ${full.p95.toFixed(2)} ms at p95 within a ${FRAME_BUDGET_MS.toFixed(1)} ms budget. The core fits; the rest of the budget goes to networking and compositing.`,
       rollbackNote,
     };
   }
   if (load <= 13) {
     return {
       grade: "tight",
-      title: "Впритык — работать будет, запаса нет",
-      body: `Полный цикл занимает ${full.avg.toFixed(2)} мс в среднем и ${full.p95.toFixed(2)} мс в 95% кадров при бюджете ${FRAME_BUDGET_MS.toFixed(1)} мс. На этом устройстве лучше быть клиентом, а не хостом эмуляции.`,
+      title: "Tight — it works, with no headroom",
+      body: `The full cycle takes ${full.avg.toFixed(2)} ms on average and ${full.p95.toFixed(2)} ms at p95 within a ${FRAME_BUDGET_MS.toFixed(1)} ms budget. This device is better as a client than as the emulation host.`,
       rollbackNote,
     };
   }
   return {
     grade: "fail",
-    title: "Не тянет — нужен WASM-кор",
-    body: `Полный цикл занимает ${full.avg.toFixed(2)} мс в среднем и ${full.p95.toFixed(2)} мс в 95% кадров, а бюджет всего ${FRAME_BUDGET_MS.toFixed(1)} мс. jsnes на этом устройстве до 60 fps не дотягивает — переходим на libretro-ядро в WASM.`,
+    title: "Not enough — a WASM core is needed",
+    body: `The full cycle takes ${full.avg.toFixed(2)} ms on average and ${full.p95.toFixed(2)} ms at p95, while the whole budget is ${FRAME_BUDGET_MS.toFixed(1)} ms. jsnes cannot reach 60 fps on this device — switch to a libretro WASM core.`,
     rollbackNote,
   };
 }

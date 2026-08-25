@@ -1,95 +1,102 @@
 # nes-party
 
-Веб-версия NES, в которую можно играть вдвоём через браузер — каждый у себя,
-через интернет. Один создаёт игру и получает код комнаты, второй вводит код
-на телефоне и получает экран игры и тач-геймпад. Без установки.
+Play NES classics with a friend over the internet, right in the browser.
+One player hosts the game and gets a room code; the other enters the code
+on their phone and gets the game screen plus a touch gamepad. No installs.
 
-**Живая версия: https://romaxa55.github.io/nes-party/**
+**Live: https://romaxa55.github.io/nes-party/**
 
-## Как играть вдвоём
+## How to play together
 
-1. Хост открывает **Создать игру**, выбирает файл `.nes` — эмуляция
-   запускается у него. Хост играет за первого (клавиатура или тачскрин).
-2. Страница показывает код комнаты и ссылку — отправь их второму игроку.
-3. Второй открывает ссылку (или **Подключиться** + код) — получает
-   видеопоток игры и геймпад. Он играет за второго; файл игры ему не нужен.
-4. Третий и дальше подключаются как зрители.
+1. The host opens **Host a game** and picks a `.nes` file — emulation runs
+   on their device. The host plays as Player 1 (keyboard or touch).
+2. The page shows a room code and a link — send it to the second player.
+3. The second player opens the link (or **Join with a code**) — they get
+   the video stream and a gamepad. They play as Player 2; no game file needed.
+4. Anyone else joins as a spectator.
 
-Эмуляцию гонит только хост, поэтому хостить лучше с ноутбука — телефонам-
-клиентам мощность не нужна вообще. Звук на клиенте включается кнопкой
-(браузеры не разрешают звук без жеста).
+Only the host runs the emulation, so hosting from a laptop works best —
+client phones need no horsepower at all. Sound on the client is enabled
+with a button (browsers require a gesture for audio).
 
-## Архитектура
+**TV mode**: uncheck “I play as Player 1” on the host page — the host
+screen becomes the TV and both controller slots go to phones. When a
+player disconnects, a spectator is promoted automatically.
 
-**Host-authoritative**: эмулятор работает в одной точке, картинка и звук
-уходят клиентам как WebRTC-медиапоток (`canvas.captureStream` +
-`MediaStreamAudioDestinationNode`), обратно летят только нажатия кнопок —
-один байт-маска по DataChannel. Рассинхронизация невозможна в принципе,
-образ игры не покидает устройство хоста.
+## Architecture
 
-Signaling — бесплатное облако PeerJS: код комнаты зашит прямо в peer id
-хоста, поэтому свой сервер комнат не нужен вовсе.
+**Host-authoritative**: the emulator runs in one place; video and audio go
+out to clients as a WebRTC media stream (`canvas.captureStream` +
+`MediaStreamAudioDestinationNode`), and only button presses come back —
+one byte mask over a DataChannel. Desync is impossible by construction,
+and the game image never leaves the host device.
 
-**Если соединение не устанавливается** (симметричный NAT с обеих сторон),
-нужен TURN-сервер. Добавь свои ICE-серверы в localStorage обеих сторон
-под ключом `nes-party.ice`:
+Signaling uses the free PeerJS cloud: the room code is embedded in the
+host's peer id, so there is no room server at all.
+
+**If the connection fails** (symmetric NAT on both ends) you need a TURN
+server. Add your ICE servers to localStorage on both sides under the
+`nes-party.ice` key:
 
 ```json
 [{"urls":"turn:turn.example.com:3478","username":"u","credential":"p"}]
 ```
 
-Звук хоста собран на AudioWorklet: jsnes отдаёт сэмплы по одному, они
-копятся в буфер кадра и после каждого `frame()` уходят в воркет пачкой
-через postMessage (SharedArrayBuffer на GitHub Pages недоступен — нет
-COOP/COEP-заголовков). Воркет начинает играть, накопив ~70 мс запаса.
+Host audio runs through an AudioWorklet: jsnes emits samples one by one,
+they are batched per frame and posted to the worklet as transferables
+(SharedArrayBuffer is unavailable on GitHub Pages — no COOP/COEP headers).
+The worklet starts playing after buffering ~70 ms.
 
-### ROM по ссылке
+### ROM by URL
 
-`host.html?rom=<адрес>` загружает образ автоматически — получается закладка
-«открыл и играешь». Файл тянет браузер хоста; на нашем хостинге и в
-репозитории он не появляется. Разрешены пути этого же сайта и абсолютные
-`https`-адреса — серверу файла нужен CORS (`Access-Control-Allow-Origin`).
-Лимит 4 МБ, таймаут 15 секунд.
+`host.html?rom=<address>` loads the image automatically — a bookmark that
+goes straight into the game. The host's browser fetches the file; it never
+touches our hosting or the repository. Same-site paths and absolute
+`https` URLs are allowed — the file server needs CORS
+(`Access-Control-Allow-Origin`). 4 MB limit, 15 s timeout.
 
-Локальный сценарий: положи файл в `public/roms/` (каталог в `.gitignore`,
-в git не попадёт) и открой `host.html?rom=/roms/имя.nes` c dev-сервера.
+Local scenario: put a file into `public/roms/` (the folder is in
+`.gitignore` and never reaches git) and open `host.html?rom=/roms/name.nes`
+on the dev server.
 
-## Бенчмарк
+## Benchmark
 
-Отдельная страница **Бенчмарк** отвечает на вопрос, тянет ли устройство
-эмуляцию NES на JavaScript в 60 кадров — полезно перед хостингом с телефона.
+The **Device benchmark** page answers whether a device can emulate the NES
+in JavaScript at 60 fps — useful before hosting from a phone.
 
-Замер идёт четырьмя этапами (ядро, +звук, +рендер, полный цикл), каждый —
-180 кадров прогрева и 600 кадров замера, чтобы JIT успел прогреться.
-Эмулятор сам нажимает Start и A, чтобы мерить на геймплее, а не на статичной
-заставке. Вердикт выносится по p95: игру портят редкие тяжёлые кадры, а не
-средние. Отдельно меряется снимок состояния — от него зависит возможность
-роллбэк-нетплея.
+It measures four stages (core, +audio, +render, full cycle), each with
+180 warmup frames and 600 measured frames so the JIT settles. The emulator
+presses Start and A by itself to measure real gameplay rather than a
+static title screen. The verdict is based on p95: rare heavy frames ruin
+a game, not the averages. State snapshot save/load is measured separately —
+it decides whether rollback netplay is feasible.
 
-**Что уже выяснилось**: снимок состояния в jsnes весит ~1.2 МБ и снимается
-за ~6.5 мс даже на быстрой машине — `toJSON` тащит развёрнутые кэши тайлов,
-хотя настоящее состояние NES — единицы килобайт. Роллбэк на jsnes «как есть»
-не построить; при host-authoritative схеме он и не нужен.
+**Finding so far**: a jsnes state snapshot weighs ~1.2 MB and takes
+~6.5 ms even on a fast machine — `toJSON` drags expanded tile caches
+along, while the real NES state is a few kilobytes. Rollback on stock
+jsnes is a non-starter; with the host-authoritative design it is also
+unnecessary.
 
-## Запуск локально
+## Running locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Vite поднимется с `--host`: адрес `Network` открывается с телефона в той же
-Wi-Fi-сети. Страницы: `/` (меню), `/host.html`, `/join.html`, `/bench.html`.
+Vite starts with `--host`: the `Network` address opens from a phone on the
+same Wi-Fi. Pages: `/` (menu), `/host.html`, `/join.html`, `/bench.html`.
 
-Образов игр в репозитории нет и не будет: файл `.nes` выбирается на
-устройстве хоста, по сети идут только видеопоток и нажатия кнопок.
+No game images ship with this repository: the `.nes` file is picked on the
+host's device, and only the video stream and button presses travel over
+the network.
 
-## Стек
+## Stack
 
-- [jsnes](https://github.com/bfirsh/jsnes) 2.1 — ядро эмуляции (Apache-2.0)
-- [PeerJS](https://github.com/peers/peerjs) 1.5 — WebRTC и signaling (MIT)
-- Vite + TypeScript, без UI-фреймворка
+- [jsnes](https://github.com/bfirsh/jsnes) 2.1 — emulation core (Apache-2.0)
+- [PeerJS](https://github.com/peers/peerjs) 1.5 — WebRTC and signaling (MIT)
+- Vite + TypeScript, no UI framework
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).
