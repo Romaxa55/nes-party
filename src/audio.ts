@@ -94,10 +94,21 @@ export class AudioPipe {
     };
   }
 
-  /** Создавать только из обработчика клика — иначе контекст не запустится. */
+  /**
+   * Лучше создавать из обработчика клика. Если жеста не было (например,
+   * ROM загружен по ссылке ?rom=), контекст останется suspended — тогда
+   * добудим его при первом касании или клавише.
+   */
   static async create(): Promise<AudioPipe> {
     const ctx = new AudioContext();
-    await ctx.resume();
+    void ctx.resume().catch(() => {});
+    if (ctx.state === "suspended") {
+      const wake = (): void => {
+        void ctx.resume().catch(() => {});
+      };
+      window.addEventListener("pointerdown", wake, { once: true });
+      window.addEventListener("keydown", wake, { once: true });
+    }
 
     const url = URL.createObjectURL(
       new Blob([WORKLET_SOURCE], { type: "application/javascript" }),

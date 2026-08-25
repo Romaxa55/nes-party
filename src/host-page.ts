@@ -1,6 +1,6 @@
 import "./style.css";
 import { $ } from "./dom";
-import { setupRomPicker } from "./rom-store";
+import { setupRomPicker, isValidRom } from "./rom-store";
 import { startEngine, type Engine } from "./engine";
 import { AudioPipe } from "./audio";
 import { HostSession, type PeerInfo } from "./net";
@@ -135,6 +135,27 @@ async function begin(rom: Uint8Array): Promise<void> {
 
   // pagehide надёжнее beforeunload на мобильных браузерах.
   window.addEventListener("pagehide", () => session.destroy());
+}
+
+// ROM по ссылке: host.html?rom=https://... — файл тянется браузером хоста
+// с указанного адреса, в репозитории и на нашем хостинге его нет. Серверу
+// файла нужны HTTPS и CORS-заголовок Access-Control-Allow-Origin.
+const romUrl = new URLSearchParams(location.search).get("rom");
+if (romUrl) {
+  void (async () => {
+    try {
+      const res = await fetch(romUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if (!isValidRom(bytes)) throw new Error("по ссылке не iNES-файл");
+      void begin(bytes);
+    } catch (err) {
+      pickError.textContent =
+        `ROM по ссылке не загрузился (${(err as Error).message}). ` +
+        `Проверь адрес, HTTPS и CORS на сервере файла.`;
+      pickError.hidden = false;
+    }
+  })();
 }
 
 function renderPeers(list: PeerInfo[]): void {
