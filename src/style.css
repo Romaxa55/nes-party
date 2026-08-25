@@ -521,6 +521,9 @@ a {
   inset: 0;
   background: #000;
   z-index: 5;
+  /* Никаких браузерных жестов на игровой сцене: double-tap zoom по кнопкам
+     и скролл-баунс на iOS. Обычные тапы (клики по HUD) работают. */
+  touch-action: none;
 }
 
 .game-view {
@@ -724,6 +727,23 @@ a {
 /* B чуть ниже A — под естественный наклон большого пальца. */
 .btn-zone .ab-row .round:first-child {
   margin-top: 30px;
+}
+
+/* Мгновенный отклик нажатия: класс вешает attachTouchpad. */
+.btn-zone .round,
+.btn-zone .pill {
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    transform 0.12s;
+}
+
+.btn-zone .round.pressed,
+.btn-zone .pill.pressed {
+  background: rgba(255, 255, 255, 0.24);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: rgba(255, 255, 255, 0.95);
+  transform: scale(0.92);
 }
 
 /* Подсказка повернуть телефон — только в портрете поверх сцены. */

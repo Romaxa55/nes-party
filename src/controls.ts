@@ -91,6 +91,27 @@ export class InputAggregator {
 }
 
 /**
+ * iOS Safari игнорирует user-scalable=no и местами touch-action: быстрые
+ * тапы по кнопке превращаются в double-tap zoom, протяжка — в скролл-баунс.
+ * Глушим нативные touch-поведения на игровых зонах напрямую —
+ * pointer-события при этом продолжают приходить.
+ */
+function suppressNativeTouch(el: HTMLElement): () => void {
+  const prevent = (e: TouchEvent): void => e.preventDefault();
+  el.addEventListener("touchstart", prevent, { passive: false });
+  el.addEventListener("touchmove", prevent, { passive: false });
+  return () => {
+    el.removeEventListener("touchstart", prevent);
+    el.removeEventListener("touchmove", prevent);
+  };
+}
+
+/** Короткий тактильный отклик на нажатие; iOS вибрацию не даёт — молча нет. */
+function buzz(): void {
+  if ("vibrate" in navigator) navigator.vibrate(8);
+}
+
+/**
  * Тачскрин-геймпад. Кнопки определяются по координате пальца, а не по цели
  * события: палец можно проводить между зонами D-pad не отрывая, и диагонали
  * работают через зоны с data-button="UP,LEFT".
@@ -101,6 +122,23 @@ export function attachTouchpad(
 ): () => void {
   const pointers = new Map<number, ButtonMask>();
   let last: ButtonMask = 0;
+  const unsuppress = suppressNativeTouch(pad);
+
+  // Элементы кнопок и их маски — для мгновенной подсветки нажатого.
+  const buttonEls: Array<{ el: HTMLElement; mask: ButtonMask }> = [];
+  for (const el of pad.querySelectorAll<HTMLElement>("[data-button]")) {
+    let mask = 0;
+    for (const name of (el.dataset.button ?? "").split(",")) {
+      mask |= BIT_BY_NAME[name.trim()] ?? 0;
+    }
+    if (mask) buttonEls.push({ el, mask });
+  }
+
+  function highlight(mask: ButtonMask): void {
+    for (const b of buttonEls) {
+      b.el.classList.toggle("pressed", (mask & b.mask) === b.mask);
+    }
+  }
 
   function maskAtPoint(x: number, y: number): ButtonMask {
     for (const el of document.elementsFromPoint(x, y)) {
@@ -118,8 +156,10 @@ export function attachTouchpad(
     let mask = 0;
     for (const m of pointers.values()) mask |= m;
     if (mask !== last) {
+      if (mask & ~last) buzz(); // отклик только на нажатие, не на отпускание
       last = mask;
       onState(mask);
+      highlight(mask);
     }
   }
 
@@ -151,6 +191,8 @@ export function attachTouchpad(
     pad.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", onPointerUp);
     window.removeEventListener("pointercancel", onPointerUp);
+    unsuppress();
+    highlight(0);
     if (last !== 0) onState(0);
   };
 }
@@ -186,6 +228,7 @@ export function attachStick(
   const DEAD_PX = 14; // мёртвая зона в пикселях
   const RANGE_PX = 40; // максимум визуального отклонения шляпки
 
+  const unsuppress = suppressNativeTouch(zone);
   let pointerId: number | null = null;
   let originX = 0;
   let originY = 0;
@@ -266,6 +309,7 @@ export function attachStick(
     zone.removeEventListener("pointermove", onPointerMove);
     window.removeEventListener("pointerup", onPointerUp);
     window.removeEventListener("pointercancel", onPointerUp);
+    unsuppress();
     release();
   };
 }
