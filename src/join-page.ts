@@ -1,7 +1,12 @@
 import "./style.css";
-import { $ } from "./dom";
+import { $, setupFullscreenButton } from "./dom";
 import { ClientSession, normalizeCode, CODE_LENGTH } from "./net";
-import { attachKeyboard, attachTouchpad, InputAggregator } from "./controls";
+import {
+  attachKeyboard,
+  attachTouchpad,
+  attachStick,
+  InputAggregator,
+} from "./controls";
 
 const screenJoin = $("screen-join");
 const screenPlay = $("screen-play");
@@ -29,9 +34,11 @@ codeInput.addEventListener("keydown", (e) => {
 // нельзя — после реконнекта копии тогглили бы muted туда-обратно.
 soundBtn.addEventListener("click", () => {
   video.muted = !video.muted;
-  soundBtn.textContent = video.muted ? "Enable sound" : "Mute";
+  soundBtn.textContent = video.muted ? "Sound: off" : "Sound: on";
   if (!video.muted) void video.play().catch(() => {});
 });
+
+setupFullscreenButton($("fs-btn"));
 
 async function connect(): Promise<void> {
   if (connecting) return;
@@ -76,7 +83,10 @@ async function connect(): Promise<void> {
 
   const inputs = new InputAggregator((mask) => session.sendInput(mask));
   detachInputs = [
-    attachTouchpad($("pad"), (m) => inputs.set("touch", m)),
+    attachTouchpad($("btn-zone"), (m) => inputs.set("touch", m)),
+    attachStick($("stick-zone"), $("stick-base"), $("stick-nub"), (m) =>
+      inputs.set("stick", m),
+    ),
     attachKeyboard((m) => inputs.set("kb", m)),
   ];
 

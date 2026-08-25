@@ -559,3 +559,234 @@ a {
 video.nes-screen {
   object-fit: contain;
 }
+
+/* --- полноэкранная игровая сцена --- */
+
+.stage {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  z-index: 5;
+}
+
+.game-view {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  background: #000;
+}
+
+.hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: calc(6px + env(safe-area-inset-top))
+    calc(10px + env(safe-area-inset-right)) 6px
+    calc(10px + env(safe-area-inset-left));
+  z-index: 20;
+  pointer-events: none; /* сквозь пустые места HUD можно играть */
+  font-size: 13px;
+}
+
+.hud-left,
+.hud-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  pointer-events: auto;
+  background: rgba(10, 12, 20, 0.6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 99px;
+  padding: 6px 14px;
+  min-height: 34px;
+}
+
+.hud-code {
+  font-family: var(--mono);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.hud-muted {
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.hud-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 4px;
+  min-height: 0;
+  flex: 0 0 auto;
+  border-radius: 6px;
+}
+
+.hud-toggle {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hud-toggle input {
+  accent-color: var(--accent);
+}
+
+.hud-note {
+  position: absolute;
+  bottom: calc(8px + env(safe-area-inset-bottom));
+  left: 0;
+  right: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 12px;
+  z-index: 15;
+  pointer-events: none;
+  margin: 0;
+  padding: 0 16px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+}
+
+/* --- оверлей-управление: плавающий стик слева, кнопки справа --- */
+
+.overlay-pad {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Наш display:flex сильнее UA-правила для [hidden] — возвращаем скрытие. */
+.overlay-pad[hidden] {
+  display: none;
+}
+
+.stick-zone {
+  flex: 1 1 55%;
+  position: relative;
+}
+
+.stick-base {
+  position: absolute;
+  width: 124px;
+  height: 124px;
+  margin: -62px 0 0 -62px; /* центр основания — в точке касания */
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.stick-base[hidden] {
+  display: none;
+}
+
+.stick-nub {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+  border: 1.5px solid rgba(255, 255, 255, 0.4);
+}
+
+.btn-zone {
+  flex: 1 1 45%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: flex-end;
+  gap: 18px;
+  padding: 0 calc(20px + env(safe-area-inset-right))
+    calc(22px + env(safe-area-inset-bottom)) 0;
+}
+
+.btn-zone .sys-row {
+  display: flex;
+  gap: 10px;
+}
+
+.btn-zone .pill {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.6);
+  border-radius: 99px;
+  padding: 9px 16px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+.btn-zone .ab-row {
+  display: flex;
+  gap: 22px;
+  align-items: flex-start;
+}
+
+.btn-zone .round {
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  color: rgba(255, 255, 255, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 22px;
+}
+
+/* B чуть ниже A — под естественный наклон большого пальца. */
+.btn-zone .ab-row .round:first-child {
+  margin-top: 30px;
+}
+
+/* Подсказка повернуть телефон — только в портрете поверх сцены. */
+.rotate-hint {
+  display: none;
+}
+
+@media (orientation: portrait) {
+  .stage .rotate-hint {
+    display: block;
+    position: absolute;
+    left: 50%;
+    top: 12%;
+    transform: translateX(-50%);
+    background: rgba(10, 12, 20, 0.8);
+    border: 1px solid var(--line);
+    padding: 10px 18px;
+    border-radius: 99px;
+    color: var(--text);
+    font-size: 14px;
+    z-index: 30;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+}
