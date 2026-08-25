@@ -57,11 +57,30 @@
           <div class="hud">
             <div class="hud-left">
               <span id="play-status" class="hud-muted">Connected</span>
+              <span id="ping" class="hud-muted">–</span>
+              <span id="roster" class="hud-muted"></span>
             </div>
             <div class="hud-right">
               <button id="sound-btn" class="hud-btn">Sound: off</button>
+              <button id="mic-btn" class="hud-btn">Mic: off</button>
+              <button id="chat-btn" class="hud-btn">Chat</button>
               <button id="fs-btn" class="hud-btn" title="Fullscreen">⛶</button>
             </div>
+          </div>
+
+          <div id="chat-panel" class="chat-panel" hidden>
+            <div id="chat-log" class="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <input
+                id="chat-input"
+                class="chat-input"
+                type="text"
+                maxlength="300"
+                placeholder="Message…"
+                autocomplete="off"
+              />
+              <button type="submit" class="hud-btn">Send</button>
+            </form>
           </div>
 
           <div id="pad" class="overlay-pad touch-only">

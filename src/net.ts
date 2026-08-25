@@ -2,6 +2,33 @@ import { Peer, type DataConnection, type MediaConnection } from "peerjs";
 import type { ButtonMask } from "./controls";
 
 /**
+ * Минимальная задержка воспроизведения входящего медиапотока: браузер
+ * по умолчанию держит jitter-буфер в сотню-другую миллисекунд «на всякий
+ * случай» — для игры это чистый инпут-лаг. Поля нестандартные (Chromium),
+ * Safari молча игнорирует.
+ */
+export function tuneReceiversForLatency(call: MediaConnection): void {
+  try {
+    const pc = (call as unknown as { peerConnection?: RTCPeerConnection })
+      .peerConnection;
+    for (const r of pc?.getReceivers() ?? []) {
+      const rr = r as RTCRtpReceiver & {
+        playoutDelayHint?: number;
+        jitterBufferTarget?: number;
+      };
+      rr.playoutDelayHint = 0;
+      try {
+        rr.jitterBufferTarget = 0;
+      } catch {
+        // старые Chromium кидают на присвоение — не критично
+      }
+    }
+  } catch {
+    // нет peerConnection — просто без тюнинга
+  }
+}
+
+/**
  * Сетевой слой на PeerJS. Signaling идёт через бесплатное облако PeerJS
  * (0.peerjs.com) — свой сервер не нужен. Код комнаты зашит прямо в peer id
  * хоста, поэтому серверная логика комнат не нужна вовсе.
@@ -26,11 +53,24 @@ type Message =
   | { t: "hello" }
   | { t: "slot"; p: Slot }
   | { t: "full" }
-  | { t: "input"; s: number };
+  | { t: "input"; s: number }
+  | { t: "ping"; ts: number }
+  | { t: "pong"; ts: number }
+  | { t: "rtt"; ms: number }
+  | { t: "chat"; text: string; from?: string }
+  | { t: "roster"; l: Array<{ s: Slot; r: number | null }> };
 
 export interface PeerInfo {
   id: string;
   slot: Slot;
+  /** RTT до хоста, репортит сам клиент; null — ещё не измерен. */
+  rtt: number | null;
+}
+
+const CHAT_MAX_LEN = 300;
+
+function slotName(slot: Slot): string {
+  return slot === 0 ? "Spec" : `P${slot}`;
 }
 
 function randomCode(): string {
@@ -81,6 +121,7 @@ interface HostPeer {
   conn: DataConnection;
   slot: Slot;
   call: MediaConnection | null;
+  rtt: number | null;
 }
 
 export class HostSession {
@@ -94,12 +135,21 @@ export class HostSession {
   onPeersChange: (peers: PeerInfo[]) => void = () => {};
   /** Ошибка Peer после создания комнаты (сокет, WebRTC-переговоры и т.п.). */
   onError: (err: Error) => void = () => {};
+  /** Сообщение чата (включая свои — хост тоже видит их через этот колбэк). */
+  onChat: (from: string, text: string) => void = () => {};
+  /** Входящий голосовой звонок (metadata.kind === "voice") — отдаётся VoiceHub. */
+  onVoiceCall: (call: MediaConnection) => void = (call) => call.close();
 
   private constructor(
     readonly code: string,
     private peer: Peer,
   ) {
     peer.on("connection", (conn) => this.acceptConnection(conn));
+    peer.on("call", (call) => {
+      const kind = (call.metadata as { kind?: string } | undefined)?.kind;
+      if (kind === "voice") this.onVoiceCall(call);
+      else call.close(); // незваные медиазвонки не принимаем
+    });
     // Обрыв сокета до signaling не рвёт уже установленные P2P-соединения —
     // тихо переподключаемся, чтобы могли заходить новые игроки.
     peer.on("disconnected", () => {
@@ -140,10 +190,25 @@ export class HostSession {
       const msg = raw as Message;
       if (msg?.t === "hello") {
         this.admit(conn);
-      } else if (msg?.t === "input") {
-        const hp = this.peers.get(conn.peer);
-        if (hp && hp.conn === conn && hp.slot !== 0) {
-          this.onInput(hp.slot, Number(msg.s) & 0xff);
+        return;
+      }
+      const hp = this.peers.get(conn.peer);
+      if (!hp || hp.conn !== conn) return;
+      switch (msg?.t) {
+        case "input":
+          if (hp.slot !== 0) this.onInput(hp.slot, Number(msg.s) & 0xff);
+          break;
+        case "ping":
+          conn.send({ t: "pong", ts: Number(msg.ts) } satisfies Message);
+          break;
+        case "rtt":
+          hp.rtt = Math.max(0, Math.round(Number(msg.ms))) || null;
+          this.emitPeers();
+          break;
+        case "chat": {
+          const text = String(msg.text ?? "").slice(0, CHAT_MAX_LEN).trim();
+          if (text) this.deliverChat(slotName(hp.slot), text);
+          break;
         }
       }
     });
@@ -177,7 +242,7 @@ export class HostSession {
 
     const slot: Slot = existing ? existing.slot : this.freeSlot();
 
-    const hp: HostPeer = { conn, slot, call: null };
+    const hp: HostPeer = { conn, slot, call: null, rtt: null };
     this.peers.set(conn.peer, hp); // до close(), чтобы drop старого не снёс запись
     if (existing) {
       existing.call?.close();
@@ -227,10 +292,39 @@ export class HostSession {
     }
   }
 
+  /** Сообщение от хоста в общий чат. */
+  sendChat(text: string): void {
+    const clean = text.slice(0, CHAT_MAX_LEN).trim();
+    if (clean) this.deliverChat("Host", clean);
+  }
+
+  /** Показывает сообщение всем: локально хосту и рассылкой клиентам. */
+  private deliverChat(from: string, text: string): void {
+    this.onChat(from, text);
+    const msg = { t: "chat", from, text } satisfies Message;
+    for (const hp of this.peers.values()) {
+      if (hp.conn.open) hp.conn.send(msg);
+    }
+  }
+
   private emitPeers(): void {
-    this.onPeersChange(
-      [...this.peers.entries()].map(([id, p]) => ({ id, slot: p.slot })),
-    );
+    const list = [...this.peers.entries()].map(([id, p]) => ({
+      id,
+      slot: p.slot,
+      rtt: p.rtt,
+    }));
+    this.onPeersChange(list);
+    // Состав комнаты — клиентам; хост включает сам себя как P1, когда играет.
+    const roster = {
+      t: "roster",
+      l: [
+        ...(this.hostPlays ? [{ s: 1 as Slot, r: null }] : []),
+        ...list.map((p) => ({ s: p.slot, r: p.rtt })),
+      ],
+    } satisfies Message;
+    for (const hp of this.peers.values()) {
+      if (hp.conn.open) hp.conn.send(roster);
+    }
   }
 
   destroy(): void {
@@ -248,15 +342,22 @@ export class HostSession {
 export class ClientSession {
   /** Назначенный слот: 1/2 — играем, 0 — зритель. */
   slot: Slot | null = null;
+  /** Последний измеренный RTT до хоста, мс. */
+  rtt: number | null = null;
 
   onClose: () => void = () => {};
   /** Хост может пересадить на другой слот уже после подключения. */
   onSlotChange: (slot: Slot) => void = () => {};
+  onChat: (from: string, text: string) => void = () => {};
+  onRtt: (ms: number) => void = () => {};
+  /** Состав комнаты (слоты и пинги), рассылается хостом при изменениях. */
+  onRoster: (l: Array<{ s: Slot; r: number | null }>) => void = () => {};
 
   // Медиапоток может прийти раньше, чем страница успеет подписаться, —
   // буферизуем последний и отдаём при назначении обработчика.
   private streamCb: (stream: MediaStream) => void = () => {};
   private lastStream: MediaStream | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | undefined;
 
   set onStream(cb: (stream: MediaStream) => void) {
     this.streamCb = cb;
@@ -266,7 +367,17 @@ export class ClientSession {
   private constructor(
     private peer: Peer,
     private conn: DataConnection,
+    private hostId: string,
   ) {}
+
+  /** Периодический замер RTT; результат уходит и хосту для его HUD. */
+  private startPing(): void {
+    this.pingTimer = setInterval(() => {
+      if (this.conn.open) {
+        this.conn.send({ t: "ping", ts: performance.now() } satisfies Message);
+      }
+    }, 2000);
+  }
 
   /** Подключается к комнате; reject — «не найдена», «мест нет» или таймаут. */
   static async connect(code: string): Promise<ClientSession> {
@@ -300,7 +411,8 @@ export class ClientSession {
         );
       });
 
-      const conn = peer.connect(ID_PREFIX + normalizeCode(code), {
+      const hostId = ID_PREFIX + normalizeCode(code);
+      const conn = peer.connect(hostId, {
         serialization: "json",
         reliable: true,
       });
@@ -309,7 +421,7 @@ export class ClientSession {
         fail(new Error("Could not create a connection — reload the page."));
         return;
       }
-      const session = new ClientSession(peer, conn);
+      const session = new ClientSession(peer, conn, hostId);
 
       conn.on("open", () => conn.send({ t: "hello" } satisfies Message));
       conn.on("data", (raw) => {
@@ -319,12 +431,22 @@ export class ClientSession {
           if (!settled) {
             settled = true;
             clearTimeout(timer);
+            session.startPing();
             resolve(session);
           } else {
             session.onSlotChange(msg.p);
           }
         } else if (msg?.t === "full") {
           fail(new Error("No free seats in this room."));
+        } else if (msg?.t === "pong") {
+          const ms = Math.max(0, Math.round(performance.now() - Number(msg.ts)));
+          session.rtt = ms;
+          session.onRtt(ms);
+          if (conn.open) conn.send({ t: "rtt", ms } satisfies Message);
+        } else if (msg?.t === "chat") {
+          session.onChat(String(msg.from ?? "?"), String(msg.text ?? ""));
+        } else if (msg?.t === "roster") {
+          session.onRoster(Array.isArray(msg.l) ? msg.l : []);
         }
       });
       conn.on("close", () => {
@@ -337,8 +459,9 @@ export class ClientSession {
       });
 
       peer.on("call", (call) => {
-        call.answer(); // своего потока у клиента нет
+        call.answer(); // своего потока в игровом звонке у клиента нет
         call.on("stream", (stream) => {
+          tuneReceiversForLatency(call);
           session.lastStream = stream;
           session.streamCb(stream);
         });
@@ -352,7 +475,20 @@ export class ClientSession {
     }
   }
 
+  sendChat(text: string): void {
+    const clean = text.slice(0, CHAT_MAX_LEN).trim();
+    if (clean && this.conn.open) {
+      this.conn.send({ t: "chat", text: clean } satisfies Message);
+    }
+  }
+
+  /** Голосовой звонок хосту: свой микрофон в обмен на микс остальных. */
+  callVoice(mic: MediaStream): MediaConnection {
+    return this.peer.call(this.hostId, mic, { metadata: { kind: "voice" } });
+  }
+
   destroy(): void {
+    clearInterval(this.pingTimer);
     this.peer.destroy();
   }
 }

@@ -11,6 +11,9 @@ import {
   InputAggregator,
 } from "./controls";
 import { ms } from "./bench";
+import { setupChatPanel } from "./chat-ui";
+import { VoiceHub } from "./voice";
+import { renderSVG } from "uqr";
 
 const screenPick = $("screen-pick");
 const screenGame = $("screen-game");
@@ -29,6 +32,28 @@ let hostPlays = true;
 let lastPeers: PeerInfo[] = [];
 
 setupFullscreenButton($("fs-btn"));
+
+// Чат и микрофон живут на модульном уровне: кнопки одни, сессия появляется позже.
+let chatSend: (text: string) => void = () => {};
+const chat = setupChatPanel((text) => chatSend(text));
+
+let voiceHub: VoiceHub | null = null;
+let voiceCtx: AudioContext | null = null;
+let micOn = false;
+const micBtn = $<HTMLButtonElement>("mic-btn");
+micBtn.addEventListener("click", async () => {
+  if (!voiceHub) return; // комната ещё не создана
+  void voiceCtx?.resume().catch(() => {});
+  micBtn.disabled = true;
+  try {
+    micOn = await voiceHub.setMic(!micOn);
+    micBtn.textContent = micOn ? "Mic: on" : "Mic: off";
+  } catch {
+    micBtn.textContent = "Mic blocked";
+  } finally {
+    micBtn.disabled = false;
+  }
+});
 
 setupRomPicker({
   dropZone: $("drop"),
@@ -122,6 +147,15 @@ async function begin(rom: Uint8Array): Promise<void> {
   sessionRef = session;
   session.setHostPlays(hostPlays); // если чекбокс сняли до регистрации
 
+  chatSend = (text) => session.sendChat(text);
+  session.onChat = (from, text) => chat.addMessage(from, text);
+
+  // Голосовой микшер — на том же AudioContext, что и звук игры.
+  voiceCtx = audio?.context ?? new AudioContext();
+  const hub = new VoiceHub(voiceCtx);
+  voiceHub = hub;
+  session.onVoiceCall = (call) => hub.accept(call);
+
   session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
   session.onPeersChange = (list) => {
     lastPeers = list;
@@ -135,8 +169,14 @@ async function begin(rom: Uint8Array): Promise<void> {
   let streamOk = true;
   try {
     const stream = canvas.captureStream(60);
+    // Подсказки кодеку: картинка — постоянное движение, звук — «музыка»
+    // (без голосовых фильтров, портящих чиптюн).
+    for (const track of stream.getVideoTracks()) track.contentHint = "motion";
     if (audio) {
-      for (const track of audio.stream.getAudioTracks()) stream.addTrack(track);
+      for (const track of audio.stream.getAudioTracks()) {
+        track.contentHint = "music";
+        stream.addTrack(track);
+      }
     }
     session.setStream(stream);
   } catch {
@@ -154,6 +194,19 @@ async function begin(rom: Uint8Array): Promise<void> {
       ? "Room is open. Send the code or the link to a friend."
       : "Room is open (audio failed to start — playing without it).";
   }
+
+  // QR-приглашение: второй телефон сканирует камерой и попадает сразу в комнату.
+  const qrBtn = $<HTMLButtonElement>("qr-btn");
+  const qrOverlay = $("qr-overlay");
+  $("qr-box").innerHTML = renderSVG(link, { border: 2 }); // наш собственный SVG
+  $("qr-code-text").textContent = session.code;
+  qrBtn.hidden = false;
+  qrBtn.addEventListener("click", () => {
+    qrOverlay.hidden = false;
+  });
+  qrOverlay.addEventListener("click", () => {
+    qrOverlay.hidden = true;
+  });
 
   copyLink.hidden = false;
   copyLink.addEventListener("click", async () => {
@@ -260,11 +313,17 @@ async function loadGallery(): Promise<void> {
 void loadGallery();
 
 function renderPeers(list: PeerInfo[]): void {
-  const p1 = list.some((p) => p.slot === 1);
-  const p2 = list.some((p) => p.slot === 2);
+  const ping = (p: PeerInfo | undefined): string =>
+    p?.rtt ? ` ${p.rtt}ms` : "";
+  const p1 = list.find((p) => p.slot === 1);
+  const p2 = list.find((p) => p.slot === 2);
   const watchers = list.filter((p) => p.slot === 0).length;
-  const p1Text = hostPlays ? "P1: you" : p1 ? "P1: phone" : "P1: waiting";
-  const p2Text = p2 ? "P2: connected" : "P2: waiting";
+  const p1Text = hostPlays
+    ? "P1: you"
+    : p1
+      ? `P1: phone${ping(p1)}`
+      : "P1: waiting";
+  const p2Text = p2 ? `P2: on${ping(p2)}` : "P2: waiting";
   const parts = [
     p1Text,
     p2Text,

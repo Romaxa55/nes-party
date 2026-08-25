@@ -65,11 +65,29 @@
                 <input type="checkbox" id="host-plays" checked />
                 I play
               </label>
+              <button id="qr-btn" class="hud-btn" hidden>QR</button>
               <button id="copy-link" class="hud-btn" hidden>Copy link</button>
+              <button id="mic-btn" class="hud-btn">Mic: off</button>
+              <button id="chat-btn" class="hud-btn">Chat</button>
               <button id="fs-btn" class="hud-btn" title="Fullscreen">⛶</button>
             </div>
           </div>
           <p id="net-status" class="hud-note">Creating room…</p>
+
+          <div id="chat-panel" class="chat-panel" hidden>
+            <div id="chat-log" class="chat-log"></div>
+            <form id="chat-form" class="chat-form">
+              <input
+                id="chat-input"
+                class="chat-input"
+                type="text"
+                maxlength="300"
+                placeholder="Message…"
+                autocomplete="off"
+              />
+              <button type="submit" class="hud-btn">Send</button>
+            </form>
+          </div>
 
           <div id="pad" class="overlay-pad touch-only">
             <div id="stick-zone" class="stick-zone">
@@ -90,6 +108,14 @@
           </div>
 
           <div class="rotate-hint">Rotate your phone sideways</div>
+
+          <div id="qr-overlay" class="qr-overlay" hidden>
+            <div class="qr-card">
+              <div id="qr-box" class="qr-box"></div>
+              <div id="qr-code-text" class="qr-code-label"></div>
+              <p class="qr-hint">Scan with a phone camera to join · tap to close</p>
+            </div>
+          </div>
         </div>
       </section>
     </main>

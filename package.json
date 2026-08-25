@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "jsnes": "^2.1.0",
-    "peerjs": "^1.5.5"
+    "peerjs": "^1.5.5",
+    "uqr": "^0.1.3"
   },
   "devDependencies": {
     "@vitejs/plugin-basic-ssl": "^2.3.0",
