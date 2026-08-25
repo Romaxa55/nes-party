@@ -27,6 +27,19 @@ export default defineConfig({
         join: fileURLToPath(new URL("join.html", import.meta.url)),
         bench: fileURLToPath(new URL("bench.html", import.meta.url)),
       },
+      output: {
+        // Держим каждый чанк меньше ~100 КБ: канал заливки на VibHost VM
+        // (vh_write_file_on_project) отдаёт 413 на большие тела запроса.
+        // jsnes — десяток модулей, режется по подсистемам консоли.
+        manualChunks(id: string) {
+          if (id.includes("node_modules/jsnes")) {
+            if (id.includes("/ppu")) return "jsnes-ppu";
+            if (id.includes("/papu")) return "jsnes-papu";
+            if (id.includes("/mappers")) return "jsnes-mappers";
+            return "jsnes-core";
+          }
+        },
+      },
     },
   },
 });
