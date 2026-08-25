@@ -1,6 +1,6 @@
 import "./style.css";
 import { $ } from "./dom";
-import { setupRomPicker, isValidRom } from "./rom-store";
+import { setupRomPicker, isValidRom, FILE_LIMIT } from "./rom-store";
 import { startEngine, type Engine } from "./engine";
 import { AudioPipe } from "./audio";
 import { HostSession, type PeerInfo } from "./net";
@@ -137,25 +137,49 @@ async function begin(rom: Uint8Array): Promise<void> {
   window.addEventListener("pagehide", () => session.destroy());
 }
 
-// ROM по ссылке: host.html?rom=https://... — файл тянется браузером хоста
-// с указанного адреса, в репозитории и на нашем хостинге его нет. Серверу
-// файла нужны HTTPS и CORS-заголовок Access-Control-Allow-Origin.
+// ROM по ссылке: host.html?rom=<адрес> — файл тянется браузером хоста,
+// в репозитории и на нашем хостинге его нет. Разрешены пути своего origin
+// (локальный public/roms/) и абсолютные https-адреса с CORS. В localStorage
+// такой ROM намеренно не сохраняется: он и так доступен по той же ссылке.
 const romUrl = new URLSearchParams(location.search).get("rom");
-if (romUrl) {
-  void (async () => {
-    try {
-      const res = await fetch(romUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const bytes = new Uint8Array(await res.arrayBuffer());
-      if (!isValidRom(bytes)) throw new Error("по ссылке не iNES-файл");
-      void begin(bytes);
-    } catch (err) {
-      pickError.textContent =
-        `ROM по ссылке не загрузился (${(err as Error).message}). ` +
-        `Проверь адрес, HTTPS и CORS на сервере файла.`;
-      pickError.hidden = false;
+if (romUrl) void beginFromUrl(romUrl);
+
+async function beginFromUrl(raw: string): Promise<void> {
+  const pickStatus = $("pick-status");
+  pickStatus.textContent = "Загружаю ROM по ссылке…";
+  pickStatus.hidden = false;
+
+  let bytes: Uint8Array;
+  try {
+    const url = new URL(raw, location.href);
+    // Отсекает data:, blob: и чужие http: — источники, которых в честной
+    // ссылке быть не может.
+    if (url.protocol !== "https:" && url.origin !== location.origin) {
+      throw new Error("разрешены https-адреса или файлы этого сайта");
     }
-  })();
+    const res = await fetch(url, {
+      credentials: "omit",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const declared = Number(res.headers.get("content-length") ?? 0);
+    if (declared > FILE_LIMIT) throw new Error("файл больше 4 МБ");
+    bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > FILE_LIMIT) throw new Error("файл больше 4 МБ");
+    if (!isValidRom(bytes)) throw new Error("по ссылке не iNES-файл");
+  } catch (err) {
+    pickStatus.hidden = true;
+    // Пока ссылка грузилась, пользователь мог запустить игру файлом —
+    // тогда не мусорим ошибкой поверх идущей игры.
+    if (started) return;
+    pickError.textContent =
+      `ROM по ссылке не загрузился (${(err as Error).message}). ` +
+      `Проверь адрес, HTTPS и CORS на сервере файла.`;
+    pickError.hidden = false;
+    return;
+  }
+  pickStatus.hidden = true;
+  void begin(bytes);
 }
 
 function renderPeers(list: PeerInfo[]): void {

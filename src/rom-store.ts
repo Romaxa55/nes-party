@@ -7,7 +7,8 @@
 const KEY_DATA = "nes-party.rom";
 const KEY_NAME = "nes-party.rom.name";
 const STORE_LIMIT = 1_500_000;
-const FILE_LIMIT = 4_000_000;
+/** Больше — не образ NES; общий предел для файла и загрузки по ссылке. */
+export const FILE_LIMIT = 4_000_000;
 
 function toBase64(bytes: Uint8Array): string {
   let s = "";
