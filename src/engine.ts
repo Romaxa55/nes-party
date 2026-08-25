@@ -34,6 +34,8 @@ export function startEngine(opts: {
   rom: Uint8Array;
   canvas: HTMLCanvasElement;
   audio?: AudioPipe | null;
+  /** Game Genie коды (например, бесконечные жизни) — применяются к рому. */
+  ggCodes?: string[];
   onStats?: (s: EngineStats) => void;
   /** Эмулятор упал во время игры; цикл уже остановлен. */
   onError?: (err: Error) => void;
@@ -53,6 +55,17 @@ export function startEngine(opts: {
     onAudioSample: audio ? audio.onSample : undefined,
   });
   nes.loadROM(opts.rom);
+
+  if (opts.ggCodes?.length) {
+    for (const code of opts.ggCodes) {
+      try {
+        nes.gameGenie.addCode(code.trim().toUpperCase());
+      } catch {
+        // кривой код — молча пропускаем, остальные работают
+      }
+    }
+    nes.gameGenie.setEnabled(true);
+  }
 
   // Желаемые и применённые маски кнопок по игрокам.
   const desired: [ButtonMask, ButtonMask] = [0, 0];
