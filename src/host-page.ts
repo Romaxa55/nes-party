@@ -66,9 +66,16 @@ setupRomPicker({
   onRom: (bytes) => void begin(bytes),
 });
 
-async function begin(rom: Uint8Array): Promise<void> {
+// Ручные Game Genie коды из ссылки: host.html?gg=SLAIUZ,GXXZZLVI
+const queryGg = (new URLSearchParams(location.search).get("gg") ?? "")
+  .split(",")
+  .map((c) => c.trim())
+  .filter(Boolean);
+
+async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   if (started) return;
   started = true;
+  const gg = ggCodes?.length ? ggCodes : queryGg;
   pickError.hidden = true;
   screenPick.hidden = true;
   screenGame.hidden = false;
@@ -89,6 +96,7 @@ async function begin(rom: Uint8Array): Promise<void> {
       rom,
       canvas,
       audio,
+      ggCodes: gg,
       onStats: (s) => {
         hostStats.textContent =
           `${s.fps.toFixed(0)} fps · frame ${ms(s.frameMs)} ms` +
@@ -156,6 +164,7 @@ async function begin(rom: Uint8Array): Promise<void> {
   const hub = new VoiceHub(voiceCtx);
   voiceHub = hub;
   session.onVoiceCall = (call) => hub.accept(call);
+  micBtn.disabled = false; // хаб готов — кнопка оживает
 
   session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
   session.onPeersChange = (list) => {
@@ -221,7 +230,10 @@ async function begin(rom: Uint8Array): Promise<void> {
   });
 
   // pagehide надёжнее beforeunload на мобильных браузерах.
-  window.addEventListener("pagehide", () => session.destroy());
+  window.addEventListener("pagehide", () => {
+    voiceHub?.destroy();
+    session.destroy();
+  });
 }
 
 // ROM по ссылке: host.html?rom=<адрес> — файл тянется браузером хоста,
@@ -231,7 +243,7 @@ async function begin(rom: Uint8Array): Promise<void> {
 const romUrl = new URLSearchParams(location.search).get("rom");
 if (romUrl) void beginFromUrl(romUrl);
 
-async function beginFromUrl(raw: string): Promise<void> {
+async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
   const pickStatus = $("pick-status");
   pickStatus.textContent = "Loading ROM from the link…";
   pickStatus.hidden = false;
@@ -275,7 +287,7 @@ async function beginFromUrl(raw: string): Promise<void> {
     return;
   }
   pickStatus.hidden = true;
-  void begin(bytes);
+  void begin(bytes, ggCodes);
 }
 
 /**
@@ -285,17 +297,22 @@ async function beginFromUrl(raw: string): Promise<void> {
  * не появляется.
  */
 async function loadGallery(): Promise<void> {
-  let list: Array<{ name: string; file: string }> = [];
+  let list: Array<{ name: string; file: string; gg?: string[] }> = [];
   try {
     const res = await fetch("/roms/index.json", { credentials: "omit" });
     if (!res.ok) return;
     const parsed = (await res.json()) as {
-      roms?: Array<{ name?: unknown; file?: unknown }>;
+      roms?: Array<{ name?: unknown; file?: unknown; gg?: unknown }>;
     };
-    list = (parsed.roms ?? []).filter(
-      (r): r is { name: string; file: string } =>
-        typeof r?.name === "string" && typeof r?.file === "string",
-    );
+    list = (parsed.roms ?? [])
+      .filter(
+        (r): r is { name: string; file: string; gg?: string[] } =>
+          typeof r?.name === "string" && typeof r?.file === "string",
+      )
+      .map((r) => ({
+        ...r,
+        gg: Array.isArray(r.gg) ? r.gg.filter((c) => typeof c === "string") : undefined,
+      }));
   } catch {
     return; // нет манифеста — нет галереи
   }
@@ -306,8 +323,11 @@ async function loadGallery(): Promise<void> {
   for (const rom of list) {
     const btn = document.createElement("button");
     btn.className = "ghost";
-    btn.textContent = rom.name;
-    btn.addEventListener("click", () => void beginFromUrl(`/roms/${rom.file}`));
+    // Читы из манифеста (например, бесконечные жизни) — помечаем в кнопке.
+    btn.textContent = rom.gg?.length ? `${rom.name} · ∞ lives` : rom.name;
+    btn.addEventListener("click", () =>
+      void beginFromUrl(`/roms/${rom.file}`, rom.gg),
+    );
     gallery.append(btn);
   }
 }

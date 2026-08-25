@@ -348,8 +348,10 @@ export function attachKeyboard(
 
   function onKeyUp(e: KeyboardEvent): void {
     const name = KEYBOARD_MAP[e.code];
-    if (!name || isUiTarget(e)) return;
-    e.preventDefault();
+    if (!name) return;
+    // Отпускание обрабатываем всегда: keyup, прилетевший в поле чата после
+    // нажатия в игре, иначе оставил бы кнопку зажатой навсегда.
+    if (!isUiTarget(e)) e.preventDefault();
     const next = mask & ~BIT_BY_NAME[name];
     if (next !== mask) onState((mask = next));
   }

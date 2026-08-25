@@ -16,9 +16,13 @@ export function tuneReceiversForLatency(call: MediaConnection): void {
         playoutDelayHint?: number;
         jitterBufferTarget?: number;
       };
-      rr.playoutDelayHint = 0;
+      // Видео — в ноль (каждая мс буфера = инпут-лаг); звуку оставляем
+      // ~60 мс: лишнюю задержку голоса человек не замечает, а треск на
+      // первом же джиттере — сразу.
+      const video = rr.track?.kind === "video";
+      rr.playoutDelayHint = video ? 0 : 0.06;
       try {
-        rr.jitterBufferTarget = 0;
+        rr.jitterBufferTarget = video ? 0 : 60;
       } catch {
         // старые Chromium кидают на присвоение — не критично
       }
@@ -147,6 +151,8 @@ interface HostPeer {
   slot: Slot;
   call: MediaConnection | null;
   rtt: number | null;
+  /** Метки времени последних чат-сообщений — для rate-limit. */
+  chatTimes?: number[];
 }
 
 export class HostSession {
@@ -216,6 +222,11 @@ export class HostSession {
   }
 
   private acceptConnection(conn: DataConnection): void {
+    // Быстрый канал ввода: unreliable, бинарный, со своим порядком (seq).
+    if (conn.label === "input") {
+      this.acceptInputChannel(conn);
+      return;
+    }
     conn.on("data", (raw) => {
       const msg = raw as Message;
       if (msg?.t === "hello") {
@@ -231,12 +242,26 @@ export class HostSession {
         case "ping":
           conn.send({ t: "pong", ts: Number(msg.ts) } satisfies Message);
           break;
-        case "rtt":
-          hp.rtt = Math.max(0, Math.round(Number(msg.ms))) || null;
-          this.emitPeers();
+        case "rtt": {
+          const ms = Math.round(Number(msg.ms));
+          if (!Number.isFinite(ms) || ms < 0 || ms > 60_000) break;
+          // Roster рассылается только при заметном изменении пинга и с
+          // троттлингом — иначе каждый rtt-репорт умножался бы на всех пиров.
+          const notable = hp.rtt === null || Math.abs(ms - hp.rtt) >= 15;
+          hp.rtt = ms;
+          if (notable) this.emitPeersThrottled();
           break;
+        }
         case "chat": {
-          const text = String(msg.text ?? "").slice(0, CHAT_MAX_LEN).trim();
+          // Мусор и гиганты — мимо, до какой-либо обработки.
+          if (typeof msg.text !== "string" || msg.text.length > 2000) break;
+          // Rate-limit: 5 сообщений за 5 секунд на пира, лишнее молча дропаем —
+          // хост ретранслирует каждое всем, флуд умножался бы на аплинк.
+          const now = performance.now();
+          hp.chatTimes = (hp.chatTimes ?? []).filter((t) => now - t < 5000);
+          if (hp.chatTimes.length >= 5) break;
+          hp.chatTimes.push(now);
+          const text = msg.text.slice(0, CHAT_MAX_LEN).trim();
           if (text) this.deliverChat(slotName(hp.slot), text);
           break;
         }
@@ -259,6 +284,33 @@ export class HostSession {
     };
     conn.on("close", drop);
     conn.on("error", drop);
+  }
+
+  /**
+   * Пакет ввода: [маска, seqLo, seqHi]. Канал без ретрансмитов и порядка,
+   * поэтому устаревшие/дублирующиеся пакеты отбрасываются по seq
+   * (сравнение с учётом переполнения 16 бит).
+   */
+  private acceptInputChannel(conn: DataConnection): void {
+    let lastSeq = -1;
+    conn.on("data", (raw) => {
+      const hp = this.peers.get(conn.peer);
+      if (!hp || hp.slot === 0) return;
+      const b =
+        raw instanceof ArrayBuffer
+          ? new Uint8Array(raw)
+          : raw instanceof Uint8Array
+            ? raw
+            : null;
+      if (!b || b.length < 3) return;
+      const seq = b[1] | (b[2] << 8);
+      if (lastSeq >= 0) {
+        const diff = (seq - lastSeq + 0x10000) & 0xffff;
+        if (diff === 0 || diff > 0x8000) return; // дубль или устаревший
+      }
+      lastSeq = seq;
+      this.onInput(hp.slot, b[0] & 0xff);
+    });
   }
 
   private admit(conn: DataConnection): void {
@@ -356,6 +408,17 @@ export class HostSession {
     }
   }
 
+  private emitTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Коалесцирует частые обновления (rtt-репорты) в одну рассылку раз в 500 мс. */
+  private emitPeersThrottled(): void {
+    if (this.emitTimer) return;
+    this.emitTimer = setTimeout(() => {
+      this.emitTimer = undefined;
+      this.emitPeers();
+    }, 500);
+  }
+
   private emitPeers(): void {
     const list = [...this.peers.entries()].map(([id, p]) => ({
       id,
@@ -408,6 +471,10 @@ export class ClientSession {
   private streamCb: (stream: MediaStream) => void = () => {};
   private lastStream: MediaStream | null = null;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
+  private inputConn: DataConnection | null = null;
+  private inputTimer: ReturnType<typeof setInterval> | undefined;
+  private inputSeq = 0;
+  private lastMask: ButtonMask = 0;
 
   set onStream(cb: (stream: MediaStream) => void) {
     this.streamCb = cb;
@@ -427,6 +494,49 @@ export class ClientSession {
         this.conn.send({ t: "ping", ts: performance.now() } satisfies Message);
       }
     }, 2000);
+  }
+
+  /**
+   * Быстрый канал ввода: без ретрансмитов — потерянный пакет не блокирует
+   * следующие (у reliable-канала потеря стоила бы RTT всем нажатиям после
+   * неё). Потери страхуются ресендом текущего состояния каждые 50 мс.
+   * Пока канал не открыт (или не открылся вовсе) — работает старый путь.
+   */
+  private openInputChannel(): void {
+    // Вспомогательный канал не имеет права ломать основное подключение —
+    // любая ошибка здесь просто оставляет ввод на надёжном пути.
+    try {
+      const c = this.peer.connect(this.hostId, {
+        label: "input",
+        reliable: false,
+        serialization: "raw", // как есть, без сериализатора
+      });
+      if (!c) return;
+      c.on("open", () => {
+        this.inputConn = c;
+      });
+      const drop = (): void => {
+        if (this.inputConn === c) this.inputConn = null;
+      };
+      c.on("close", drop);
+      c.on("error", drop);
+    } catch {
+      return;
+    }
+    this.inputTimer = setInterval(() => this.pushInput(), 50);
+  }
+
+  private pushInput(): void {
+    if (this.inputConn?.open) {
+      this.inputSeq = (this.inputSeq + 1) & 0xffff;
+      const b = new Uint8Array(3);
+      b[0] = this.lastMask;
+      b[1] = this.inputSeq & 0xff;
+      b[2] = this.inputSeq >> 8;
+      this.inputConn.send(b);
+    } else if (this.conn.open) {
+      this.conn.send({ t: "input", s: this.lastMask } satisfies Message);
+    }
   }
 
   /** Подключается к комнате; reject — «не найдена», «мест нет» или таймаут. */
@@ -482,6 +592,7 @@ export class ClientSession {
             settled = true;
             clearTimeout(timer);
             session.startPing();
+            session.openInputChannel();
             resolve(session);
           } else {
             session.onSlotChange(msg.p);
@@ -494,11 +605,21 @@ export class ClientSession {
           session.onRtt(ms);
           if (conn.open) conn.send({ t: "rtt", ms } satisfies Message);
         } else if (msg?.t === "chat") {
-          session.onChat(String(msg.from ?? "?"), String(msg.text ?? ""));
+          session.onChat(
+            String(msg.from ?? "?").slice(0, 20),
+            String(msg.text ?? "").slice(0, CHAT_MAX_LEN),
+          );
         } else if (msg?.t === "sys") {
-          session.onSys(String(msg.text ?? ""));
+          session.onSys(String(msg.text ?? "").slice(0, CHAT_MAX_LEN));
         } else if (msg?.t === "roster") {
-          session.onRoster(Array.isArray(msg.l) ? msg.l : []);
+          const l = Array.isArray(msg.l)
+            ? msg.l.filter(
+                (e): e is { s: Slot; r: number | null } =>
+                  !!e && typeof e === "object" &&
+                  typeof (e as { s?: unknown }).s === "number",
+              )
+            : [];
+          session.onRoster(l);
         }
       });
       conn.on("close", () => {
@@ -510,21 +631,29 @@ export class ClientSession {
         else session.onClose();
       });
 
+      let gameCall: MediaConnection | null = null;
       peer.on("call", (call) => {
-        call.answer(); // своего потока в игровом звонке у клиента нет
+        // Принимаем только игровой звонок от нашего хоста — незваные мимо.
+        const kind = (call.metadata as { kind?: string } | undefined)?.kind;
+        if (call.peer !== hostId || kind === "voice") {
+          call.close();
+          return;
+        }
+        gameCall?.close(); // реконнект хоста — старый поток больше не нужен
+        gameCall = call;
         call.on("stream", (stream) => {
           tuneReceiversForLatency(call);
           session.lastStream = stream;
           session.streamCb(stream);
         });
+        call.answer(); // своего потока в игровом звонке у клиента нет
       });
     });
   }
 
   sendInput(mask: ButtonMask): void {
-    if (this.conn.open) {
-      this.conn.send({ t: "input", s: mask & 0xff } satisfies Message);
-    }
+    this.lastMask = mask & 0xff;
+    this.pushInput();
   }
 
   sendChat(text: string): void {
@@ -534,13 +663,17 @@ export class ClientSession {
     }
   }
 
-  /** Голосовой звонок хосту: свой микрофон в обмен на микс остальных. */
-  callVoice(mic: MediaStream): MediaConnection {
-    return this.peer.call(this.hostId, mic, { metadata: { kind: "voice" } });
+  /** Голосовой звонок хосту: свой микрофон в обмен на микс остальных.
+   *  null — peer отвалился от signaling (peerjs возвращает undefined). */
+  callVoice(mic: MediaStream): MediaConnection | null {
+    return (
+      this.peer.call(this.hostId, mic, { metadata: { kind: "voice" } }) ?? null
+    );
   }
 
   destroy(): void {
     clearInterval(this.pingTimer);
+    clearInterval(this.inputTimer);
     this.peer.destroy();
   }
 }
