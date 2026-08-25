@@ -19,6 +19,11 @@ Only the host runs the emulation, so hosting from a laptop works best —
 client phones need no horsepower at all. Sound on the client is enabled
 with a button (browsers require a gesture for audio).
 
+On phones the controls are an overlay: a floating stick on the left half
+of the screen and translucent A/B/Select/Start on the right. On desktop
+use the keyboard: arrows or WASD to move, K or X = A, J or Z = B,
+Enter = Start, Shift = Select.
+
 **TV mode**: uncheck “I play as Player 1” on the host page — the host
 screen becomes the TV and both controller slots go to phones. When a
 player disconnects, a spectator is promoted automatically.

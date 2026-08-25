@@ -10,7 +10,7 @@ export default defineConfig({
   // в secure context, а телефоны заходят по IP. Телефон один раз спросит про
   // сертификат — «всё равно открыть». На прод-сборку не влияет.
   // VITE_NO_SSL=1 отключает — для автотестов, которым нужен plain http.
-  plugins: process.env.VITE_NO_SSL ? [] : [basicSsl()],
+  plugins: process.env.VITE_NO_SSL === "1" ? [] : [basicSsl()],
   server: {
     // Слушать 0.0.0.0, чтобы страница открывалась с телефона по IP в той же сети.
     host: true,

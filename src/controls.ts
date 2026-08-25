@@ -155,18 +155,22 @@ export function attachTouchpad(
   };
 }
 
-// Маска направления по вектору от точки касания: 8 секторов по 45°,
-// сектор 0 — вправо, дальше по часовой (ось Y экрана растёт вниз).
-const SECTOR_MASKS = [
-  MASKS.RIGHT,
-  MASKS.RIGHT | MASKS.DOWN,
-  MASKS.DOWN,
-  MASKS.DOWN | MASKS.LEFT,
-  MASKS.LEFT,
-  MASKS.LEFT | MASKS.UP,
-  MASKS.UP,
-  MASKS.UP | MASKS.RIGHT,
-];
+/**
+ * Маска направления по углу вектора от точки касания (градусы, 0 — вправо,
+ * по часовой: ось Y экрана растёт вниз). Кардинальные сектора шире
+ * диагональных (60° против 30°): случайный наклон пальца при движении
+ * «вправо» не должен давать «вправо-вниз» — в половине игр это присед.
+ */
+function maskFromDegrees(deg: number): ButtonMask {
+  if (deg < 30 || deg >= 330) return MASKS.RIGHT;
+  if (deg < 60) return MASKS.RIGHT | MASKS.DOWN;
+  if (deg < 120) return MASKS.DOWN;
+  if (deg < 150) return MASKS.DOWN | MASKS.LEFT;
+  if (deg < 210) return MASKS.LEFT;
+  if (deg < 240) return MASKS.LEFT | MASKS.UP;
+  if (deg < 300) return MASKS.UP;
+  return MASKS.UP | MASKS.RIGHT;
+}
 
 /**
  * Плавающий виртуальный стик: палец кладётся в любое место зоны, там
@@ -206,9 +210,8 @@ export function attachStick(
       emit(0);
       return;
     }
-    const angle = Math.atan2(dy, dx); // -PI..PI, 0 — вправо
-    const sector = (Math.round(angle / (Math.PI / 4)) + 8) % 8;
-    emit(SECTOR_MASKS[sector]);
+    const deg = ((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360;
+    emit(maskFromDegrees(deg));
   }
 
   function release(): void {
@@ -219,9 +222,19 @@ export function attachStick(
   }
 
   function onPointerDown(e: PointerEvent): void {
-    if (pointerId !== null) return; // стик уже занят другим пальцем
+    if (pointerId !== null) {
+      e.preventDefault(); // стик занят другим пальцем — глушим compat-события
+      return;
+    }
     e.preventDefault();
     pointerId = e.pointerId;
+    // Захват: pointermove продолжает приходить, даже когда палец или мышь
+    // уехали за пределы зоны (у мыши implicit capture нет).
+    try {
+      zone.setPointerCapture(e.pointerId);
+    } catch {
+      // указатель мог уже исчезнуть — не критично
+    }
     originX = e.clientX;
     originY = e.clientY;
     // Основание появляется там, куда лёг палец.

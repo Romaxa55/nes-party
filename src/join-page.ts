@@ -70,9 +70,6 @@ async function connect(): Promise<void> {
   screenPlay.hidden = false;
   window.scrollTo(0, 0);
 
-  applySlot(session.slot ?? 0);
-  session.onSlotChange = applySlot; // хост может пересадить на лету
-
   // Стрим мог прийти раньше подписки — сеттер в ClientSession отдаст его сразу.
   session.onStream = (stream) => {
     video.srcObject = stream;
@@ -82,19 +79,36 @@ async function connect(): Promise<void> {
   };
 
   const inputs = new InputAggregator((mask) => session.sendInput(mask));
-  detachInputs = [
-    attachTouchpad($("btn-zone"), (m) => inputs.set("touch", m)),
-    attachStick($("stick-zone"), $("stick-base"), $("stick-nub"), (m) =>
-      inputs.set("stick", m),
-    ),
-    attachKeyboard((m) => inputs.set("kb", m)),
-  ];
+  const attachAll = (): void => {
+    if (detachInputs.length) return;
+    detachInputs = [
+      attachTouchpad($("btn-zone"), (m) => inputs.set("touch", m)),
+      attachStick($("stick-zone"), $("stick-base"), $("stick-nub"), (m) =>
+        inputs.set("stick", m),
+      ),
+      attachKeyboard((m) => inputs.set("kb", m)),
+    ];
+  };
+  const detachAll = (): void => {
+    for (const detach of detachInputs) detach();
+    detachInputs = [];
+  };
+
+  // Зрителю ввод не положен. Пересадка слотов на лету снимает и вешает
+  // обработчики целиком — заодно это отпускает зажатый стик, если хост
+  // пересадил игрока прямо во время касания.
+  const onSlot = (slot: number): void => {
+    applySlot(slot);
+    if (slot === 0) detachAll();
+    else attachAll();
+  };
+  onSlot(session.slot ?? 0);
+  session.onSlotChange = onSlot;
 
   session.onClose = () => {
     // Снять игровые обработчики обязательно: глобальный keydown иначе
     // перехватывал бы буквы кода комнаты (WASD/KJXZ входят в его алфавит).
-    for (const detach of detachInputs) detach();
-    detachInputs = [];
+    detachAll();
     session.destroy();
     video.srcObject = null;
     screenPlay.hidden = true;
