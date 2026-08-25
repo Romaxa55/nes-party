@@ -25,6 +25,14 @@ const video = $<HTMLVideoElement>("stream-video");
 
 let connecting = false;
 let detachInputs: Array<() => void> = [];
+let sessionRef: ClientSession | null = null;
+
+// Один обработчик на страницу: подписка внутри connect() копилась бы
+// с каждым реконнектом. pagehide надёжнее beforeunload на мобильных.
+window.addEventListener("pagehide", () => {
+  voice?.disable();
+  sessionRef?.destroy();
+});
 // Чат-панель одна на страницу; отправитель переключается на живую сессию.
 let chat: ChatPanel | null = null;
 let chatSend: (text: string) => void = () => {};
@@ -108,7 +116,11 @@ async function connect(): Promise<void> {
     if (specs) parts.push(`${specs} watching`);
     rosterEl.textContent = parts.length ? `In room: ${parts.join(", ")}` : "";
   };
+  sessionRef = session;
   voice = new VoiceClient((mic) => session.callVoice(mic));
+  voice.onEnded = () => {
+    micBtn.textContent = "Mic: off"; // звонок отвалился сам — кнопка не врёт
+  };
   micBtn.textContent = "Mic: off";
 
   // Стрим мог прийти раньше подписки — сеттер в ClientSession отдаст его сразу.
@@ -165,8 +177,6 @@ async function connect(): Promise<void> {
 
   // Телефон-геймпад не должен гаснуть посреди игры.
   navigator.wakeLock?.request("screen").catch(() => {});
-  // pagehide надёжнее beforeunload на мобильных браузерах.
-  window.addEventListener("pagehide", () => session.destroy());
 }
 
 function showError(message: string): void {

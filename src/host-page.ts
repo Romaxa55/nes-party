@@ -164,6 +164,7 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   const hub = new VoiceHub(voiceCtx);
   voiceHub = hub;
   session.onVoiceCall = (call) => hub.accept(call);
+  micBtn.disabled = false; // хаб готов — кнопка оживает
 
   session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
   session.onPeersChange = (list) => {
@@ -229,7 +230,10 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   });
 
   // pagehide надёжнее beforeunload на мобильных браузерах.
-  window.addEventListener("pagehide", () => session.destroy());
+  window.addEventListener("pagehide", () => {
+    voiceHub?.destroy();
+    session.destroy();
+  });
 }
 
 // ROM по ссылке: host.html?rom=<адрес> — файл тянется браузером хоста,

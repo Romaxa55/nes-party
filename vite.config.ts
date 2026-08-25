@@ -38,6 +38,9 @@ export default defineConfig({
             if (id.includes("/mappers")) return "jsnes-mappers";
             return "jsnes-core";
           }
+          // Явный чанк: без него peerjs приклеивался к net.ts, и общий чанк
+          // подобрался к лимиту заливки на 2 КБ.
+          if (id.includes("node_modules/peerjs")) return "peerjs";
         },
       },
     },
