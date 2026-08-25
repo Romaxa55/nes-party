@@ -16,7 +16,19 @@ export function setupFullscreenButton(button: HTMLElement): void {
   // fullscreenEnabled ловит и запрет через Permissions-Policy/iframe,
   // а не только отсутствие метода.
   if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) {
-    button.hidden = true;
+    // iOS Safari: настоящего fullscreen нет — кнопка объясняет PWA-путь.
+    button.addEventListener("click", () => {
+      if (document.getElementById("ios-fs-hint")) return;
+      const hint = document.createElement("div");
+      hint.id = "ios-fs-hint";
+      hint.className = "ios-fs-hint";
+      hint.textContent =
+        "iPhone: open the Share menu and tap “Add to Home Screen” — " +
+        "the game will launch fullscreen, without Safari bars. Tap to dismiss.";
+      hint.addEventListener("click", () => hint.remove());
+      document.body.append(hint);
+      setTimeout(() => hint.remove(), 10_000);
+    });
     return;
   }
   button.addEventListener("click", () => {

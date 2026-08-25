@@ -96,6 +96,7 @@ async function connect(): Promise<void> {
   if (!chat) chat = setupChatPanel((text) => chatSend(text));
   chatSend = (text) => session.sendChat(text);
   session.onChat = (from, text) => chat?.addMessage(from, text);
+  session.onSys = (text) => chat?.addSystem(text);
   session.onRtt = (ms) => {
     pingEl.textContent = `${ms} ms`;
   };
