@@ -107,8 +107,14 @@ function suppressNativeTouch(el: HTMLElement): () => void {
 }
 
 /** Короткий тактильный отклик на нажатие; iOS вибрацию не даёт — молча нет. */
+let lastBuzzAt = 0;
 function buzz(): void {
-  if ("vibrate" in navigator) navigator.vibrate(8);
+  if (!("vibrate" in navigator)) return;
+  // Не чаще раза в 60 мс: скольжение по кнопкам не должно жужжать очередью.
+  const now = performance.now();
+  if (now - lastBuzzAt < 60) return;
+  lastBuzzAt = now;
+  navigator.vibrate(12); // короче ~10 мс часть Android-моторов не отрабатывает
 }
 
 /**
@@ -320,11 +326,16 @@ export function attachKeyboard(
 ): () => void {
   let mask: ButtonMask = 0;
 
-  // Ввод в поле или нажатие Enter на сфокусированной кнопке — не игра:
-  // иначе WASD нельзя набрать в поле кода, а Enter «жмёт» Start вместо кнопки.
+  // Ввод в поле — не игра: иначе WASD нельзя набрать в поле кода. Кнопка
+  // или чекбокс в фокусе (после тапа по HUD) перехватывают только Enter
+  // и Space — стрелки и буквы продолжают идти в игру.
   function isUiTarget(e: KeyboardEvent): boolean {
     const t = e.target as HTMLElement | null;
-    return !!t?.closest("input, textarea, select, button, a");
+    if (!t) return false;
+    if (t.closest('input[type="checkbox"], button, a')) {
+      return e.code === "Enter" || e.code === "Space";
+    }
+    return !!t.closest("input, textarea, select");
   }
 
   function onKeyDown(e: KeyboardEvent): void {

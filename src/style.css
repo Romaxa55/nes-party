@@ -729,13 +729,16 @@ a {
   margin-top: 30px;
 }
 
-/* Мгновенный отклик нажатия: класс вешает attachTouchpad. */
+/* Мгновенный отклик нажатия: класс вешает attachTouchpad.
+   Без transform: scale — он ужимал бы хит-бокс прямо под пальцем,
+   и краевое касание дребезжало (elementsFromPoint промахивался). */
 .btn-zone .round,
 .btn-zone .pill {
   transition:
     background 0.12s,
     border-color 0.12s,
-    transform 0.12s;
+    color 0.12s,
+    box-shadow 0.12s;
 }
 
 .btn-zone .round.pressed,
@@ -743,7 +746,7 @@ a {
   background: rgba(255, 255, 255, 0.24);
   border-color: rgba(255, 255, 255, 0.55);
   color: rgba(255, 255, 255, 0.95);
-  transform: scale(0.92);
+  box-shadow: inset 0 0 14px rgba(255, 255, 255, 0.25);
 }
 
 /* Подсказка повернуть телефон — только в портрете поверх сцены. */
