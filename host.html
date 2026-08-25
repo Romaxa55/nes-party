@@ -40,63 +40,53 @@
         </p>
       </section>
 
-      <!-- Screen 2: game -->
+      <!-- Screen 2: game, full-viewport stage -->
       <section id="screen-game" class="screen" hidden>
-        <div class="room-bar">
-          <div>
-            <div class="room-label">Room code</div>
-            <div id="room-code" class="code">·····</div>
-          </div>
-          <button id="copy-link" class="ghost small" hidden>Copy link</button>
-        </div>
-        <p id="net-status" class="fineprint">Creating room…</p>
+        <div class="stage">
+          <canvas
+            id="game-canvas"
+            class="game-view"
+            width="256"
+            height="240"
+          ></canvas>
 
-        <canvas
-          id="game-canvas"
-          width="256"
-          height="240"
-          class="nes-screen"
-        ></canvas>
-
-        <div class="live-top">
-          <div id="players" class="players">Waiting for player 2…</div>
-          <div id="host-stats" class="live-stats">—</div>
-        </div>
-
-        <label class="host-plays">
-          <input type="checkbox" id="host-plays" checked />
-          I play as Player 1 — uncheck if this screen is the TV and everyone
-          plays from their phones
-        </label>
-
-        <div id="pad" class="pad touch-only">
-          <div class="dpad">
-            <div class="cell" data-button="UP,LEFT"></div>
-            <div class="cell key" data-button="UP">▲</div>
-            <div class="cell" data-button="UP,RIGHT"></div>
-            <div class="cell key" data-button="LEFT">◀</div>
-            <div class="cell"></div>
-            <div class="cell key" data-button="RIGHT">▶</div>
-            <div class="cell" data-button="DOWN,LEFT"></div>
-            <div class="cell key" data-button="DOWN">▼</div>
-            <div class="cell" data-button="DOWN,RIGHT"></div>
-          </div>
-          <div class="face">
-            <div class="sys">
-              <div class="pill" data-button="SELECT">SELECT</div>
-              <div class="pill" data-button="START">START</div>
+          <div class="hud">
+            <div class="hud-left">
+              <span id="room-code" class="hud-code">·····</span>
+              <span id="players" class="hud-muted">Waiting for player 2…</span>
             </div>
-            <div class="ab">
-              <div class="round" data-button="B">B</div>
-              <div class="round" data-button="A">A</div>
+            <div class="hud-right">
+              <span id="host-stats" class="hud-muted">—</span>
+              <label class="hud-toggle" title="I play as Player 1">
+                <input type="checkbox" id="host-plays" checked />
+                I play
+              </label>
+              <button id="copy-link" class="hud-btn" hidden>Copy link</button>
+              <button id="fs-btn" class="hud-btn" title="Fullscreen">⛶</button>
             </div>
           </div>
-        </div>
+          <p id="net-status" class="hud-note">Creating room…</p>
 
-        <p class="fineprint">
-          Keyboard: arrows or WASD, A — K or X, B — J or Z, Start — Enter,
-          Select — Shift.
-        </p>
+          <div id="pad" class="overlay-pad touch-only">
+            <div id="stick-zone" class="stick-zone">
+              <div id="stick-base" class="stick-base" hidden>
+                <div id="stick-nub" class="stick-nub"></div>
+              </div>
+            </div>
+            <div id="btn-zone" class="btn-zone">
+              <div class="sys-row">
+                <div class="pill" data-button="SELECT">SELECT</div>
+                <div class="pill" data-button="START">START</div>
+              </div>
+              <div class="ab-row">
+                <div class="round" data-button="B">B</div>
+                <div class="round" data-button="A">A</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rotate-hint">Rotate your phone sideways</div>
+        </div>
       </section>
     </main>
 

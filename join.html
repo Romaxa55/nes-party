@@ -43,49 +43,47 @@
         <p class="fineprint"><a href="./">Home</a></p>
       </section>
 
-      <!-- Screen 2: play -->
+      <!-- Screen 2: play, full-viewport stage -->
       <section id="screen-play" class="screen live" hidden>
-        <div class="live-top">
-          <div id="play-status" class="players">Connected</div>
-          <button id="sound-btn" class="ghost small">Enable sound</button>
-        </div>
+        <div class="stage">
+          <video
+            id="stream-video"
+            class="game-view"
+            autoplay
+            playsinline
+            muted
+          ></video>
 
-        <video
-          id="stream-video"
-          class="nes-screen"
-          autoplay
-          playsinline
-          muted
-        ></video>
-
-        <div id="pad" class="pad">
-          <div class="dpad">
-            <div class="cell" data-button="UP,LEFT"></div>
-            <div class="cell key" data-button="UP">▲</div>
-            <div class="cell" data-button="UP,RIGHT"></div>
-            <div class="cell key" data-button="LEFT">◀</div>
-            <div class="cell"></div>
-            <div class="cell key" data-button="RIGHT">▶</div>
-            <div class="cell" data-button="DOWN,LEFT"></div>
-            <div class="cell key" data-button="DOWN">▼</div>
-            <div class="cell" data-button="DOWN,RIGHT"></div>
-          </div>
-          <div class="face">
-            <div class="sys">
-              <div class="pill" data-button="SELECT">SELECT</div>
-              <div class="pill" data-button="START">START</div>
+          <div class="hud">
+            <div class="hud-left">
+              <span id="play-status" class="hud-muted">Connected</span>
             </div>
-            <div class="ab">
-              <div class="round" data-button="B">B</div>
-              <div class="round" data-button="A">A</div>
+            <div class="hud-right">
+              <button id="sound-btn" class="hud-btn">Sound: off</button>
+              <button id="fs-btn" class="hud-btn" title="Fullscreen">⛶</button>
             </div>
           </div>
-        </div>
 
-        <p class="fineprint">
-          Keyboard works too: arrows or WASD, A — K or X, B — J or Z,
-          Start — Enter, Select — Shift.
-        </p>
+          <div id="pad" class="overlay-pad touch-only">
+            <div id="stick-zone" class="stick-zone">
+              <div id="stick-base" class="stick-base" hidden>
+                <div id="stick-nub" class="stick-nub"></div>
+              </div>
+            </div>
+            <div id="btn-zone" class="btn-zone">
+              <div class="sys-row">
+                <div class="pill" data-button="SELECT">SELECT</div>
+                <div class="pill" data-button="START">START</div>
+              </div>
+              <div class="ab-row">
+                <div class="round" data-button="B">B</div>
+                <div class="round" data-button="A">A</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="rotate-hint">Rotate your phone sideways</div>
+        </div>
       </section>
     </main>
 

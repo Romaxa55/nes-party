@@ -18,6 +18,18 @@ const BIT_BY_NAME: Record<string, number> = {
   RIGHT: 1 << Controller.BUTTON_RIGHT,
 };
 
+/** Битовые маски кнопок для сборки состояния вручную (виртуальный стик). */
+export const MASKS = {
+  A: BIT_BY_NAME.A,
+  B: BIT_BY_NAME.B,
+  SELECT: BIT_BY_NAME.SELECT,
+  START: BIT_BY_NAME.START,
+  UP: BIT_BY_NAME.UP,
+  DOWN: BIT_BY_NAME.DOWN,
+  LEFT: BIT_BY_NAME.LEFT,
+  RIGHT: BIT_BY_NAME.RIGHT,
+} as const;
+
 const KEYBOARD_MAP: Record<string, string> = {
   ArrowUp: "UP",
   ArrowDown: "DOWN",
@@ -140,6 +152,108 @@ export function attachTouchpad(
     window.removeEventListener("pointerup", onPointerUp);
     window.removeEventListener("pointercancel", onPointerUp);
     if (last !== 0) onState(0);
+  };
+}
+
+// Маска направления по вектору от точки касания: 8 секторов по 45°,
+// сектор 0 — вправо, дальше по часовой (ось Y экрана растёт вниз).
+const SECTOR_MASKS = [
+  MASKS.RIGHT,
+  MASKS.RIGHT | MASKS.DOWN,
+  MASKS.DOWN,
+  MASKS.DOWN | MASKS.LEFT,
+  MASKS.LEFT,
+  MASKS.LEFT | MASKS.UP,
+  MASKS.UP,
+  MASKS.UP | MASKS.RIGHT,
+];
+
+/**
+ * Плавающий виртуальный стик: палец кладётся в любое место зоны, там
+ * появляется основание, направление считается по вектору от точки касания.
+ * 8 направлений с мёртвой зоной — как D-pad, но по-современному.
+ */
+export function attachStick(
+  zone: HTMLElement,
+  base: HTMLElement,
+  nub: HTMLElement,
+  onState: (mask: ButtonMask) => void,
+): () => void {
+  const DEAD_PX = 14; // мёртвая зона в пикселях
+  const RANGE_PX = 40; // максимум визуального отклонения шляпки
+
+  let pointerId: number | null = null;
+  let originX = 0;
+  let originY = 0;
+  let last: ButtonMask = 0;
+
+  function emit(mask: ButtonMask): void {
+    if (mask !== last) {
+      last = mask;
+      onState(mask);
+    }
+  }
+
+  function update(x: number, y: number): void {
+    const dx = x - originX;
+    const dy = y - originY;
+    const dist = Math.hypot(dx, dy);
+
+    const clamped = dist > RANGE_PX ? RANGE_PX / dist : 1;
+    nub.style.transform = `translate(${dx * clamped}px, ${dy * clamped}px)`;
+
+    if (dist < DEAD_PX) {
+      emit(0);
+      return;
+    }
+    const angle = Math.atan2(dy, dx); // -PI..PI, 0 — вправо
+    const sector = (Math.round(angle / (Math.PI / 4)) + 8) % 8;
+    emit(SECTOR_MASKS[sector]);
+  }
+
+  function release(): void {
+    pointerId = null;
+    base.hidden = true;
+    nub.style.transform = "translate(0, 0)";
+    emit(0);
+  }
+
+  function onPointerDown(e: PointerEvent): void {
+    if (pointerId !== null) return; // стик уже занят другим пальцем
+    e.preventDefault();
+    pointerId = e.pointerId;
+    originX = e.clientX;
+    originY = e.clientY;
+    // Основание появляется там, куда лёг палец.
+    const zoneRect = zone.getBoundingClientRect();
+    base.style.left = `${originX - zoneRect.left}px`;
+    base.style.top = `${originY - zoneRect.top}px`;
+    base.hidden = false;
+    update(e.clientX, e.clientY);
+  }
+
+  function onPointerMove(e: PointerEvent): void {
+    if (e.pointerId !== pointerId) return;
+    e.preventDefault();
+    update(e.clientX, e.clientY);
+  }
+
+  function onPointerUp(e: PointerEvent): void {
+    if (e.pointerId !== pointerId) return;
+    release();
+  }
+
+  zone.addEventListener("pointerdown", onPointerDown);
+  zone.addEventListener("pointermove", onPointerMove);
+  window.addEventListener("pointerup", onPointerUp);
+  window.addEventListener("pointercancel", onPointerUp);
+
+  return () => {
+    zone.removeEventListener("pointerdown", onPointerDown);
+    zone.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", onPointerUp);
+    window.removeEventListener("pointercancel", onPointerUp);
+    release();
   };
 }
 

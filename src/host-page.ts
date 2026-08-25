@@ -1,10 +1,15 @@
 import "./style.css";
-import { $ } from "./dom";
+import { $, setupFullscreenButton } from "./dom";
 import { setupRomPicker, isValidRom, FILE_LIMIT } from "./rom-store";
 import { startEngine, type Engine } from "./engine";
 import { AudioPipe } from "./audio";
 import { HostSession, type PeerInfo } from "./net";
-import { attachKeyboard, attachTouchpad, InputAggregator } from "./controls";
+import {
+  attachKeyboard,
+  attachTouchpad,
+  attachStick,
+  InputAggregator,
+} from "./controls";
 import { ms } from "./bench";
 
 const screenPick = $("screen-pick");
@@ -22,6 +27,8 @@ let started = false;
 // телевизор, все игроки на телефонах».
 let hostPlays = true;
 let lastPeers: PeerInfo[] = [];
+
+setupFullscreenButton($("fs-btn"));
 
 setupRomPicker({
   dropZone: $("drop"),
@@ -83,7 +90,10 @@ async function begin(rom: Uint8Array): Promise<void> {
   const inputs = new InputAggregator((mask) => {
     if (hostPlays) engine?.setButtons(1, mask);
   });
-  attachTouchpad($("pad"), (m) => inputs.set("touch", m));
+  attachTouchpad($("btn-zone"), (m) => inputs.set("touch", m));
+  attachStick($("stick-zone"), $("stick-base"), $("stick-nub"), (m) =>
+    inputs.set("stick", m),
+  );
   attachKeyboard((m) => inputs.set("kb", m));
 
   // Чекбокс вешаем до создания комнаты: снять его можно и пока PeerJS
