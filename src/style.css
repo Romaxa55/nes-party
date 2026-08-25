@@ -807,6 +807,68 @@ a {
   font-weight: 600;
 }
 
+.chat-msg.sys {
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* Тосты: новое сообщение при закрытой панели, поверх игры, не ловят тач. */
+.chat-toasts {
+  position: absolute;
+  left: calc(12px + env(safe-area-inset-left));
+  bottom: calc(96px + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(300px, 58vw);
+  z-index: 18;
+  pointer-events: none;
+}
+
+.chat-toast {
+  background: rgba(10, 12, 20, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  animation:
+    toast-in 0.2s ease-out,
+    toast-out 0.4s ease-in 4.6s forwards;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes toast-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Подсказка iOS про Add to Home Screen (реального fullscreen у Safari нет). */
+.ios-fs-hint {
+  position: fixed;
+  top: calc(56px + env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(340px, 86vw);
+  background: rgba(10, 12, 20, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  z-index: 60;
+  cursor: pointer;
+}
+
 .chat-form {
   display: flex;
   gap: 8px;

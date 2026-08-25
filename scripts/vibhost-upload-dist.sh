@@ -53,9 +53,9 @@ sys.exit(0 if ok else 1)
 }
 
 # Все файлы сборки, с сохранением структуры каталогов. Каталог roms/
-# пропускаем: он попадает в dist из локального public/ и содержит бинарники —
-# ромы на VM заливает vibhost-upload-roms.sh.
-find "$DIST_DIR" -type f ! -path "*/roms/*" | while read -r f; do
+# пропускаем (бинарники из локального public/, их заливает
+# vibhost-upload-roms.sh), PNG-иконки тоже — канал только для UTF-8.
+find "$DIST_DIR" -type f ! -path "*/roms/*" ! -name "*.png" | while read -r f; do
   rel="${f#"$DIST_DIR"/}"
   upload "$APP_DIR/dist/$rel" "$f"
 done

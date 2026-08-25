@@ -58,6 +58,7 @@ type Message =
   | { t: "pong"; ts: number }
   | { t: "rtt"; ms: number }
   | { t: "chat"; text: string; from?: string }
+  | { t: "sys"; text: string }
   | { t: "roster"; l: Array<{ s: Slot; r: number | null }> };
 
 export interface PeerInfo {
@@ -115,6 +116,30 @@ function peerOptions(): NonNullable<ConstructorParameters<typeof Peer>[1]> {
   return { config: { iceServers } };
 }
 
+/**
+ * Исходящее видео хоста: плавность важнее чёткости (при нехватке сети браузер
+ * по умолчанию жертвует кадрами ради разрешения — для игры нужно наоборот),
+ * плюс потолок битрейта, чтобы не душить аплинк хоста при трёх зрителях.
+ */
+export function tuneSendersForGame(call: MediaConnection): void {
+  const apply = (): boolean => {
+    const pc = (call as unknown as { peerConnection?: RTCPeerConnection })
+      .peerConnection;
+    let done = false;
+    for (const s of pc?.getSenders() ?? []) {
+      if (s.track?.kind !== "video") continue;
+      const p = s.getParameters();
+      p.degradationPreference = "maintain-framerate";
+      if (p.encodings?.[0]) p.encodings[0].maxBitrate = 2_500_000;
+      void s.setParameters(p).catch(() => {});
+      done = true;
+    }
+    return done;
+  };
+  // Сендеры появляются после негошиации — одна отложенная попытка.
+  if (!apply()) setTimeout(apply, 1000);
+}
+
 // ---------------------------------------------------------------------------
 
 interface HostPeer {
@@ -137,6 +162,8 @@ export class HostSession {
   onError: (err: Error) => void = () => {};
   /** Сообщение чата (включая свои — хост тоже видит их через этот колбэк). */
   onChat: (from: string, text: string) => void = () => {};
+  /** Системное событие комнаты (кто вошёл/вышел/пересел) — в ленту чата. */
+  onSys: (text: string) => void = () => {};
   /** Входящий голосовой звонок (metadata.kind === "voice") — отдаётся VoiceHub. */
   onVoiceCall: (call: MediaConnection) => void = (call) => call.close();
 
@@ -181,7 +208,10 @@ export class HostSession {
   setStream(stream: MediaStream): void {
     this.stream = stream;
     for (const [id, hp] of this.peers) {
-      if (!hp.call) hp.call = this.peer.call(id, stream);
+      if (!hp.call) {
+        hp.call = this.peer.call(id, stream);
+        tuneSendersForGame(hp.call);
+      }
     }
   }
 
@@ -221,6 +251,9 @@ export class HostSession {
       this.peers.delete(conn.peer);
       if (hp.slot !== 0) this.onInput(hp.slot, 0); // отпустить кнопки
       hp.call?.close();
+      this.deliverSys(
+        hp.slot === 0 ? "A spectator left" : `Player ${hp.slot} left`,
+      );
       this.rebalance(); // освободившийся контроллер — первому зрителю
       this.emitPeers();
     };
@@ -250,7 +283,13 @@ export class HostSession {
     }
 
     conn.send({ t: "slot", p: slot } satisfies Message);
-    if (this.stream) hp.call = this.peer.call(conn.peer, this.stream);
+    if (this.stream) {
+      hp.call = this.peer.call(conn.peer, this.stream);
+      tuneSendersForGame(hp.call);
+    }
+    if (!existing) {
+      this.deliverSys(slot === 0 ? "A spectator joined" : `Player ${slot} joined`);
+    }
     this.emitPeers();
   }
 
@@ -289,6 +328,7 @@ export class HostSession {
       if (give === 0) break;
       hp.slot = give;
       hp.conn.send({ t: "slot", p: give } satisfies Message);
+      this.deliverSys(`A spectator is now Player ${give}`);
     }
   }
 
@@ -302,6 +342,15 @@ export class HostSession {
   private deliverChat(from: string, text: string): void {
     this.onChat(from, text);
     const msg = { t: "chat", from, text } satisfies Message;
+    for (const hp of this.peers.values()) {
+      if (hp.conn.open) hp.conn.send(msg);
+    }
+  }
+
+  /** Системное событие — в ленту чата всем и хосту. */
+  private deliverSys(text: string): void {
+    this.onSys(text);
+    const msg = { t: "sys", text } satisfies Message;
     for (const hp of this.peers.values()) {
       if (hp.conn.open) hp.conn.send(msg);
     }
@@ -349,6 +398,7 @@ export class ClientSession {
   /** Хост может пересадить на другой слот уже после подключения. */
   onSlotChange: (slot: Slot) => void = () => {};
   onChat: (from: string, text: string) => void = () => {};
+  onSys: (text: string) => void = () => {};
   onRtt: (ms: number) => void = () => {};
   /** Состав комнаты (слоты и пинги), рассылается хостом при изменениях. */
   onRoster: (l: Array<{ s: Slot; r: number | null }>) => void = () => {};
@@ -445,6 +495,8 @@ export class ClientSession {
           if (conn.open) conn.send({ t: "rtt", ms } satisfies Message);
         } else if (msg?.t === "chat") {
           session.onChat(String(msg.from ?? "?"), String(msg.text ?? ""));
+        } else if (msg?.t === "sys") {
+          session.onSys(String(msg.text ?? ""));
         } else if (msg?.t === "roster") {
           session.onRoster(Array.isArray(msg.l) ? msg.l : []);
         }

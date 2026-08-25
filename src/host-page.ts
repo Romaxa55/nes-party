@@ -149,6 +149,7 @@ async function begin(rom: Uint8Array): Promise<void> {
 
   chatSend = (text) => session.sendChat(text);
   session.onChat = (from, text) => chat.addMessage(from, text);
+  session.onSys = (text) => chat.addSystem(text);
 
   // Голосовой микшер — на том же AudioContext, что и звук игры.
   voiceCtx = audio?.context ?? new AudioContext();
