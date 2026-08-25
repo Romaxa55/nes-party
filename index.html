@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -11,45 +11,46 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312131a'/%3E%3Cpath d='M6 3h4v3h3v4h-3v3H6v-3H3V6h3z' fill='%236ea8ff'/%3E%3C/svg%3E"
     />
-    <title>NES Party — играем в NES вдвоём через браузер</title>
+    <title>NES Party — play NES together in your browser</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <main id="app">
       <h1>NES Party</h1>
       <p class="lede">
-        Классика NES вдвоём через интернет: один создаёт игру, второй
-        подключается по коду с телефона. Без установки — только браузер.
+        NES classics for two over the internet: one player hosts the game,
+        the other joins with a code from their phone. No installs — just
+        a browser.
       </p>
 
       <nav class="cards">
         <a class="card" href="host.html">
-          <strong>Создать игру</strong>
+          <strong>Host a game</strong>
           <span>
-            Загрузи свой файл .nes, получи код комнаты и кидай ссылку другу.
-            Эмуляция идёт у тебя — лучше запускать на ноутбуке.
+            Load your .nes file, get a room code and send the link to a
+            friend. Emulation runs on your device — a laptop works best.
           </span>
         </a>
         <a class="card" href="join.html">
-          <strong>Подключиться по коду</strong>
+          <strong>Join with a code</strong>
           <span>
-            Введи код от друга — получишь экран игры и геймпад прямо
-            на телефоне. Файл игры не нужен.
+            Enter the code from the host — you get the game screen and a
+            touch gamepad right on your phone. No game file needed.
           </span>
         </a>
         <a class="card ghost-card" href="bench.html">
-          <strong>Бенчмарк устройства</strong>
+          <strong>Device benchmark</strong>
           <span>
-            Проверка: тянет ли это устройство эмуляцию NES в 60 кадров.
-            Полезно перед тем, как хостить с телефона.
+            Check whether this device can emulate the NES at a steady 60
+            fps. Useful before hosting from a phone.
           </span>
         </a>
       </nav>
 
       <p class="fineprint">
-        Образы игр в проекте не распространяются: файл .nes выбирается на
-        устройстве хоста и никуда не отправляется — по сети идут только
-        видеопоток и нажатия кнопок.
+        No game images are distributed with this project: the .nes file is
+        picked on the host's device and never uploaded anywhere — only the
+        video stream and button presses travel over the network.
       </p>
     </main>
   </body>

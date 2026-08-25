@@ -80,12 +80,12 @@ export interface RomPickerOptions {
 export function setupRomPicker(opts: RomPickerOptions): void {
   async function acceptFile(file: File): Promise<void> {
     if (file.size > FILE_LIMIT) {
-      opts.onError("Файл больше 4 МБ — это не похоже на образ NES.");
+      opts.onError("The file is larger than 4 MB — that does not look like a NES image.");
       return;
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (!isValidRom(bytes)) {
-      opts.onError("Это не файл iNES: нет сигнатуры NES в начале. Нужен .nes.");
+      opts.onError("Not an iNES file: no NES signature at the start. A .nes file is required.");
       return;
     }
     saveRom(file.name, bytes);
@@ -120,7 +120,7 @@ export function setupRomPicker(opts: RomPickerOptions): void {
   if (savedName && opts.savedButton) {
     const button = opts.savedButton;
     button.hidden = false;
-    button.textContent = `Взять прошлый: ${savedName}`;
+    button.textContent = `Use last: ${savedName}`;
     button.addEventListener("click", () => {
       // Декодируем лениво, прямо в жесте — заодно это сохраняет user
       // activation для создания AudioContext на iOS.

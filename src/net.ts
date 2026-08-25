@@ -113,7 +113,7 @@ export class HostSession {
    * Коллизия кода (unavailable-id) — пробуем следующий, до пяти раз.
    */
   static async create(): Promise<HostSession> {
-    let lastError: Error = new Error("не удалось создать комнату");
+    let lastError: Error = new Error("failed to create a room");
     for (let attempt = 0; attempt < 5; attempt++) {
       const code = randomCode();
       try {
@@ -282,7 +282,12 @@ export class ClientSession {
         reject(err);
       };
       const timer = setTimeout(
-        () => fail(new Error("Хост не ответил. Проверь код и что игра запущена.")),
+        () =>
+          fail(
+            new Error(
+              "The host did not respond. Check the code and that the game is running.",
+            ),
+          ),
         CONNECT_TIMEOUT_MS,
       );
 
@@ -290,8 +295,8 @@ export class ClientSession {
         const type = (err as { type?: string }).type;
         fail(
           type === "peer-unavailable"
-            ? new Error("Комната не найдена. Проверь код.")
-            : new Error(`Сеть: ${(err as Error).message}`),
+            ? new Error("Room not found. Check the code.")
+            : new Error(`Network: ${(err as Error).message}`),
         );
       });
 
@@ -301,7 +306,7 @@ export class ClientSession {
       });
       // В состоянии disconnected peerjs возвращает undefined вопреки тайпингам.
       if (!conn) {
-        fail(new Error("Соединение не создалось — обнови страницу."));
+        fail(new Error("Could not create a connection — reload the page."));
         return;
       }
       const session = new ClientSession(peer, conn);
@@ -319,15 +324,15 @@ export class ClientSession {
             session.onSlotChange(msg.p);
           }
         } else if (msg?.t === "full") {
-          fail(new Error("В комнате нет свободных мест."));
+          fail(new Error("No free seats in this room."));
         }
       });
       conn.on("close", () => {
-        if (!settled) fail(new Error("Хост разорвал соединение."));
+        if (!settled) fail(new Error("The host closed the connection."));
         else session.onClose();
       });
       conn.on("error", () => {
-        if (!settled) fail(new Error("Ошибка соединения с хостом."));
+        if (!settled) fail(new Error("Connection to the host failed."));
         else session.onClose();
       });
 
@@ -384,7 +389,7 @@ function openPeer(id: string | undefined): Promise<Peer> {
       reject(err);
     };
     const timer = setTimeout(
-      () => onError(new Error("Не удалось связаться с signaling-сервером PeerJS.")),
+      () => onError(new Error("Could not reach the PeerJS signaling server.")),
       CONNECT_TIMEOUT_MS,
     );
 

@@ -59,11 +59,11 @@ async function begin(rom: Uint8Array): Promise<void> {
       audio,
       onStats: (s) => {
         hostStats.textContent =
-          `${s.fps.toFixed(0)} fps · кадр ${ms(s.frameMs)} мс` +
-          (s.droppedSteps ? ` · пропущено ${s.droppedSteps}` : "");
+          `${s.fps.toFixed(0)} fps · frame ${ms(s.frameMs)} ms` +
+          (s.droppedSteps ? ` · dropped ${s.droppedSteps}` : "");
       },
       onError: (err) => {
-        netStatus.textContent = `Эмулятор упал: ${err.message}. Обнови страницу.`;
+        netStatus.textContent = `The emulator crashed: ${err.message}. Reload the page.`;
         void audio?.close().catch(() => {});
       },
     });
@@ -73,7 +73,7 @@ async function begin(rom: Uint8Array): Promise<void> {
     started = false;
     screenGame.hidden = true;
     screenPick.hidden = false;
-    pickError.textContent = `Ядро не запустило игру: ${(err as Error).message}`;
+    pickError.textContent = `The core failed to start the game: ${(err as Error).message}`;
     pickError.hidden = false;
     return;
   }
@@ -99,14 +99,14 @@ async function begin(rom: Uint8Array): Promise<void> {
 
   // Комната создаётся параллельно с игрой: хост уже играет, пока PeerJS
   // регистрируется. Если сеть недоступна — остаётся локальная игра.
-  netStatus.textContent = "Создаю комнату…";
+  netStatus.textContent = "Creating room…";
   let session: HostSession;
   try {
     session = await HostSession.create();
   } catch (err) {
     netStatus.textContent =
-      `Комнату создать не вышло (${(err as Error).message}). ` +
-      `Игра работает локально; проверь интернет и обнови страницу.`;
+      `Could not create a room (${(err as Error).message}). ` +
+      `The game still works locally; check the connection and reload.`;
     return;
   }
   sessionRef = session;
@@ -118,7 +118,7 @@ async function begin(rom: Uint8Array): Promise<void> {
     renderPeers(list);
   };
   session.onError = (err) => {
-    netStatus.textContent = `Сеть: ${err.message}`;
+    netStatus.textContent = `Network: ${err.message}`;
   };
 
   // Трансляция: картинка с canvas + звуковая дорожка из AudioPipe.
@@ -137,23 +137,23 @@ async function begin(rom: Uint8Array): Promise<void> {
   const link = new URL(`join.html?c=${session.code}`, location.href).toString();
   if (!streamOk) {
     netStatus.textContent =
-      "Комната открыта, но браузер не отдаёт видео с canvas — " +
-      "клиенты подключатся без картинки. Попробуй другой браузер.";
+      "Room is open, but the browser cannot capture canvas video — " +
+      "clients will join without a picture. Try another browser.";
   } else {
     netStatus.textContent = audio
-      ? "Комната открыта. Отправь другу код или ссылку."
-      : "Комната открыта (звук не завёлся — играем без него).";
+      ? "Room is open. Send the code or the link to a friend."
+      : "Room is open (audio failed to start — playing without it).";
   }
 
   copyLink.hidden = false;
   copyLink.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(link);
-      copyLink.textContent = "Скопировано";
+      copyLink.textContent = "Copied";
     } catch {
       copyLink.textContent = link; // хотя бы показать
     }
-    setTimeout(() => (copyLink.textContent = "Скопировать ссылку"), 2500);
+    setTimeout(() => (copyLink.textContent = "Copy link"), 2500);
   });
 
   // pagehide надёжнее beforeunload на мобильных браузерах.
@@ -169,7 +169,7 @@ if (romUrl) void beginFromUrl(romUrl);
 
 async function beginFromUrl(raw: string): Promise<void> {
   const pickStatus = $("pick-status");
-  pickStatus.textContent = "Загружаю ROM по ссылке…";
+  pickStatus.textContent = "Loading ROM from the link…";
   pickStatus.hidden = false;
 
   let bytes: Uint8Array;
@@ -178,7 +178,7 @@ async function beginFromUrl(raw: string): Promise<void> {
     // Отсекает data:, blob: и чужие http: — источники, которых в честной
     // ссылке быть не может.
     if (url.protocol !== "https:" && url.origin !== location.origin) {
-      throw new Error("разрешены https-адреса или файлы этого сайта");
+      throw new Error("only https URLs or same-site files are allowed");
     }
     const res = await fetch(url, {
       credentials: "omit",
@@ -186,18 +186,18 @@ async function beginFromUrl(raw: string): Promise<void> {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const declared = Number(res.headers.get("content-length") ?? 0);
-    if (declared > FILE_LIMIT) throw new Error("файл больше 4 МБ");
+    if (declared > FILE_LIMIT) throw new Error("file is larger than 4 MB");
     bytes = new Uint8Array(await res.arrayBuffer());
-    if (bytes.length > FILE_LIMIT) throw new Error("файл больше 4 МБ");
-    if (!isValidRom(bytes)) throw new Error("по ссылке не iNES-файл");
+    if (bytes.length > FILE_LIMIT) throw new Error("file is larger than 4 MB");
+    if (!isValidRom(bytes)) throw new Error("the link is not an iNES file");
   } catch (err) {
     pickStatus.hidden = true;
     // Пока ссылка грузилась, пользователь мог запустить игру файлом —
     // тогда не мусорим ошибкой поверх идущей игры.
     if (started) return;
     pickError.textContent =
-      `ROM по ссылке не загрузился (${(err as Error).message}). ` +
-      `Проверь адрес, HTTPS и CORS на сервере файла.`;
+      `Failed to load the ROM from the link (${(err as Error).message}). ` +
+      `Check the URL, HTTPS and CORS on the file server.`;
     pickError.hidden = false;
     return;
   }
@@ -209,12 +209,12 @@ function renderPeers(list: PeerInfo[]): void {
   const p1 = list.some((p) => p.slot === 1);
   const p2 = list.some((p) => p.slot === 2);
   const watchers = list.filter((p) => p.slot === 0).length;
-  const p1Text = hostPlays ? "P1: ты" : p1 ? "P1: телефон" : "P1: ждём";
-  const p2Text = p2 ? "P2: подключён" : "P2: ждём";
+  const p1Text = hostPlays ? "P1: you" : p1 ? "P1: phone" : "P1: waiting";
+  const p2Text = p2 ? "P2: connected" : "P2: waiting";
   const parts = [
     p1Text,
     p2Text,
-    watchers ? `зрителей: ${watchers}` : null,
+    watchers ? `spectators: ${watchers}` : null,
   ].filter(Boolean);
   players.textContent = parts.join(" · ");
 }

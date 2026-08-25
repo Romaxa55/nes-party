@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -11,21 +11,22 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312131a'/%3E%3Cpath d='M6 3h4v3h3v4h-3v3H6v-3H3V6h3z' fill='%236ea8ff'/%3E%3C/svg%3E"
     />
-    <title>NES Party — создать игру</title>
+    <title>NES Party — host a game</title>
   </head>
   <body>
     <main id="app">
-      <!-- Экран 1: выбор ROM -->
+      <!-- Screen 1: ROM picker -->
       <section id="screen-pick" class="screen">
-        <h1>Создать игру</h1>
+        <h1>Host a game</h1>
         <p class="lede">
-          Выбери файл .nes — эмуляция запустится здесь, а друзья подключатся
-          по коду и получат экран и геймпад у себя. Ты играешь за первого.
+          Pick a .nes file — emulation starts here, and friends join with a
+          code to get the screen and a gamepad on their side. You play as
+          Player 1.
         </p>
 
         <label id="drop" for="rom-input">
-          <strong>Выбрать файл .nes</strong>
-          <span>или перетащить сюда</span>
+          <strong>Pick a .nes file</strong>
+          <span>or drop it here</span>
         </label>
         <input id="rom-input" type="file" accept=".nes" hidden />
 
@@ -34,23 +35,21 @@
         <button id="use-saved" class="ghost" hidden></button>
 
         <p class="fineprint">
-          Файл никуда не отправляется — по сети идут только видеопоток игры
-          и нажатия кнопок. <a href="./">На главную</a>
+          The file is never uploaded anywhere — only the video stream and
+          button presses travel over the network. <a href="./">Home</a>
         </p>
       </section>
 
-      <!-- Экран 2: игра -->
+      <!-- Screen 2: game -->
       <section id="screen-game" class="screen" hidden>
         <div class="room-bar">
           <div>
-            <div class="room-label">Код комнаты</div>
+            <div class="room-label">Room code</div>
             <div id="room-code" class="code">·····</div>
           </div>
-          <button id="copy-link" class="ghost small" hidden>
-            Скопировать ссылку
-          </button>
+          <button id="copy-link" class="ghost small" hidden>Copy link</button>
         </div>
-        <p id="net-status" class="fineprint">Создаю комнату…</p>
+        <p id="net-status" class="fineprint">Creating room…</p>
 
         <canvas
           id="game-canvas"
@@ -60,14 +59,14 @@
         ></canvas>
 
         <div class="live-top">
-          <div id="players" class="players">Ждём второго игрока…</div>
+          <div id="players" class="players">Waiting for player 2…</div>
           <div id="host-stats" class="live-stats">—</div>
         </div>
 
         <label class="host-plays">
           <input type="checkbox" id="host-plays" checked />
-          Я играю за первого — сними галку, если этот экран телевизор,
-          а все игроки на телефонах
+          I play as Player 1 — uncheck if this screen is the TV and everyone
+          plays from their phones
         </label>
 
         <div id="pad" class="pad touch-only">
@@ -95,8 +94,8 @@
         </div>
 
         <p class="fineprint">
-          Клавиатура: стрелки или WASD, A — K или X, B — J или Z, Start —
-          Enter, Select — Shift.
+          Keyboard: arrows or WASD, A — K or X, B — J or Z, Start — Enter,
+          Select — Shift.
         </p>
       </section>
     </main>

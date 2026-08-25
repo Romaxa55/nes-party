@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta
@@ -11,16 +11,16 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312131a'/%3E%3Cpath d='M6 3h4v3h3v4h-3v3H6v-3H3V6h3z' fill='%236ea8ff'/%3E%3C/svg%3E"
     />
-    <title>NES Party — подключиться</title>
+    <title>NES Party — join a game</title>
   </head>
   <body>
     <main id="app">
-      <!-- Экран 1: ввод кода -->
+      <!-- Screen 1: enter code -->
       <section id="screen-join" class="screen">
-        <h1>Подключиться</h1>
+        <h1>Join a game</h1>
         <p class="lede">
-          Введи код комнаты от того, кто создал игру. Экран и геймпад появятся
-          прямо здесь — файл игры не нужен.
+          Enter the room code from whoever hosts the game. The screen and
+          gamepad appear right here — no game file needed.
         </p>
 
         <div class="join-form">
@@ -33,21 +33,21 @@
             autocapitalize="characters"
             spellcheck="false"
             maxlength="5"
-            placeholder="КОД"
+            placeholder="CODE"
           />
-          <button id="connect" class="primary">Подключиться</button>
+          <button id="connect" class="primary">Connect</button>
         </div>
 
         <p id="join-error" class="error" hidden></p>
         <p id="join-status" class="fineprint" hidden></p>
-        <p class="fineprint"><a href="./">На главную</a></p>
+        <p class="fineprint"><a href="./">Home</a></p>
       </section>
 
-      <!-- Экран 2: игра -->
+      <!-- Screen 2: play -->
       <section id="screen-play" class="screen live" hidden>
         <div class="live-top">
-          <div id="play-status" class="players">Подключено</div>
-          <button id="sound-btn" class="ghost small">Включить звук</button>
+          <div id="play-status" class="players">Connected</div>
+          <button id="sound-btn" class="ghost small">Enable sound</button>
         </div>
 
         <video
@@ -83,7 +83,7 @@
         </div>
 
         <p class="fineprint">
-          С клавиатуры тоже можно: стрелки или WASD, A — K или X, B — J или Z,
+          Keyboard works too: arrows or WASD, A — K or X, B — J or Z,
           Start — Enter, Select — Shift.
         </p>
       </section>

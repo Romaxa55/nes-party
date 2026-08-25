@@ -29,7 +29,7 @@ codeInput.addEventListener("keydown", (e) => {
 // нельзя — после реконнекта копии тогглили бы muted туда-обратно.
 soundBtn.addEventListener("click", () => {
   video.muted = !video.muted;
-  soundBtn.textContent = video.muted ? "Включить звук" : "Выключить звук";
+  soundBtn.textContent = video.muted ? "Enable sound" : "Mute";
   if (!video.muted) void video.play().catch(() => {});
 });
 
@@ -37,14 +37,14 @@ async function connect(): Promise<void> {
   if (connecting) return;
   const code = normalizeCode(codeInput.value);
   if (code.length !== CODE_LENGTH) {
-    showError(`В коде комнаты ${CODE_LENGTH} символов.`);
+    showError(`The room code is ${CODE_LENGTH} characters long.`);
     return;
   }
 
   connecting = true;
   joinError.hidden = true;
   joinStatus.hidden = false;
-  joinStatus.textContent = "Подключаюсь…";
+  joinStatus.textContent = "Connecting…";
   connectBtn.disabled = true;
 
   let session: ClientSession;
@@ -91,7 +91,7 @@ async function connect(): Promise<void> {
     screenJoin.hidden = false;
     connectBtn.disabled = false;
     joinStatus.hidden = true;
-    showError("Связь с хостом потеряна. Попробуй подключиться снова.");
+    showError("Connection to the host was lost. Try connecting again.");
   };
 
   // Телефон-геймпад не должен гаснуть посреди игры.
@@ -107,6 +107,6 @@ function showError(message: string): void {
 
 function applySlot(slot: number): void {
   playStatus.textContent =
-    slot === 0 ? "Ты зритель — свободных мест нет" : `Ты — Игрок ${slot}`;
+    slot === 0 ? "You are a spectator — no free seats" : `You are Player ${slot}`;
   $("pad").hidden = slot === 0;
 }
