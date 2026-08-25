@@ -1,10 +1,15 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 
 export default defineConfig({
   // Относительный base — одинаково работает и локально, и на GitHub Pages
   // под любым именем репозитория, без правки конфига.
   base: "./",
+  // Самоподписанный HTTPS для dev: AudioWorklet (звук хоста) работает только
+  // в secure context, а телефоны заходят по IP. Телефон один раз спросит про
+  // сертификат — «всё равно открыть». На прод-сборку не влияет.
+  plugins: [basicSsl()],
   server: {
     // Слушать 0.0.0.0, чтобы страница открывалась с телефона по IP в той же сети.
     host: true,
