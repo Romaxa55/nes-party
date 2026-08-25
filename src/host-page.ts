@@ -196,8 +196,17 @@ async function beginFromUrl(raw: string): Promise<void> {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const declared = Number(res.headers.get("content-length") ?? 0);
-    if (declared > FILE_LIMIT) throw new Error("file is larger than 4 MB");
-    bytes = new Uint8Array(await res.arrayBuffer());
+    if (declared > FILE_LIMIT * 1.4) throw new Error("file is larger than 4 MB");
+    if (url.pathname.endsWith(".b64")) {
+      // ROM, сохранённый как base64-текст: так бинарники доставляются на
+      // сервер через инструменты, умеющие писать только UTF-8.
+      const text = (await res.text()).replace(/\s+/g, "");
+      const raw = atob(text);
+      bytes = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    } else {
+      bytes = new Uint8Array(await res.arrayBuffer());
+    }
     if (bytes.length > FILE_LIMIT) throw new Error("file is larger than 4 MB");
     if (!isValidRom(bytes)) throw new Error("the link is not an iNES file");
   } catch (err) {
@@ -214,6 +223,41 @@ async function beginFromUrl(raw: string): Promise<void> {
   pickStatus.hidden = true;
   void begin(bytes);
 }
+
+/**
+ * Галерея игр с сервера: /roms/index.json существует только там, куда
+ * владелец сам положил ромы — локальный public/roms/ или его собственная
+ * VM. В репозитории и на общем хостинге манифеста нет, и галерея просто
+ * не появляется.
+ */
+async function loadGallery(): Promise<void> {
+  let list: Array<{ name: string; file: string }> = [];
+  try {
+    const res = await fetch("/roms/index.json", { credentials: "omit" });
+    if (!res.ok) return;
+    const parsed = (await res.json()) as {
+      roms?: Array<{ name?: unknown; file?: unknown }>;
+    };
+    list = (parsed.roms ?? []).filter(
+      (r): r is { name: string; file: string } =>
+        typeof r?.name === "string" && typeof r?.file === "string",
+    );
+  } catch {
+    return; // нет манифеста — нет галереи
+  }
+  if (!list.length) return;
+
+  const gallery = $("rom-gallery");
+  gallery.hidden = false;
+  for (const rom of list) {
+    const btn = document.createElement("button");
+    btn.className = "ghost";
+    btn.textContent = rom.name;
+    btn.addEventListener("click", () => void beginFromUrl(`/roms/${rom.file}`));
+    gallery.append(btn);
+  }
+}
+void loadGallery();
 
 function renderPeers(list: PeerInfo[]): void {
   const p1 = list.some((p) => p.slot === 1);
