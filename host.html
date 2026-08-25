@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="theme-color" content="#12131a" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%2312131a'/%3E%3Cpath d='M6 3h4v3h3v4h-3v3H6v-3H3V6h3z' fill='%236ea8ff'/%3E%3C/svg%3E"
+    />
+    <title>NES Party — создать игру</title>
+  </head>
+  <body>
+    <main id="app">
+      <!-- Экран 1: выбор ROM -->
+      <section id="screen-pick" class="screen">
+        <h1>Создать игру</h1>
+        <p class="lede">
+          Выбери файл .nes — эмуляция запустится здесь, а друзья подключатся
+          по коду и получат экран и геймпад у себя. Ты играешь за первого.
+        </p>
+
+        <label id="drop" for="rom-input">
+          <strong>Выбрать файл .nes</strong>
+          <span>или перетащить сюда</span>
+        </label>
+        <input id="rom-input" type="file" accept=".nes" hidden />
+
+        <p id="pick-error" class="error" hidden></p>
+        <button id="use-saved" class="ghost" hidden></button>
+
+        <p class="fineprint">
+          Файл никуда не отправляется — по сети идут только видеопоток игры
+          и нажатия кнопок. <a href="./">На главную</a>
+        </p>
+      </section>
+
+      <!-- Экран 2: игра -->
+      <section id="screen-game" class="screen" hidden>
+        <div class="room-bar">
+          <div>
+            <div class="room-label">Код комнаты</div>
+            <div id="room-code" class="code">·····</div>
+          </div>
+          <button id="copy-link" class="ghost small" hidden>
+            Скопировать ссылку
+          </button>
+        </div>
+        <p id="net-status" class="fineprint">Создаю комнату…</p>
+
+        <canvas
+          id="game-canvas"
+          width="256"
+          height="240"
+          class="nes-screen"
+        ></canvas>
+
+        <div class="live-top">
+          <div id="players" class="players">Ждём второго игрока…</div>
+          <div id="host-stats" class="live-stats">—</div>
+        </div>
+
+        <div id="pad" class="pad touch-only">
+          <div class="dpad">
+            <div class="cell" data-button="UP,LEFT"></div>
+            <div class="cell key" data-button="UP">▲</div>
+            <div class="cell" data-button="UP,RIGHT"></div>
+            <div class="cell key" data-button="LEFT">◀</div>
+            <div class="cell"></div>
+            <div class="cell key" data-button="RIGHT">▶</div>
+            <div class="cell" data-button="DOWN,LEFT"></div>
+            <div class="cell key" data-button="DOWN">▼</div>
+            <div class="cell" data-button="DOWN,RIGHT"></div>
+          </div>
+          <div class="face">
+            <div class="sys">
+              <div class="pill" data-button="SELECT">SELECT</div>
+              <div class="pill" data-button="START">START</div>
+            </div>
+            <div class="ab">
+              <div class="round" data-button="B">B</div>
+              <div class="round" data-button="A">A</div>
+            </div>
+          </div>
+        </div>
+
+        <p class="fineprint">
+          Клавиатура: стрелки или WASD, A — K или X, B — J или Z, Start —
+          Enter, Select — Shift.
+        </p>
+      </section>
+    </main>
+
+    <script type="module" src="/src/host-page.ts"></script>
+  </body>
+</html>

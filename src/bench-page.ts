@@ -1,4 +1,6 @@
 import "./style.css";
+import { $ } from "./dom";
+import { setupRomPicker } from "./rom-store";
 import {
   runBenchmark,
   judge,
@@ -8,12 +10,6 @@ import {
   type BenchReport,
 } from "./bench";
 import { startLive, type LiveSession } from "./live";
-
-const $ = <T extends HTMLElement>(id: string): T => {
-  const el = document.getElementById(id);
-  if (!el) throw new Error(`Нет элемента #${id}`);
-  return el as T;
-};
 
 const screens = {
   pick: $("screen-pick"),
@@ -29,112 +25,22 @@ function show(name: keyof typeof screens): void {
   window.scrollTo(0, 0);
 }
 
-// --- хранение выбранного ROM ------------------------------------------------
-// Кладём в localStorage, чтобы при повторном открытии страницы на телефоне
-// не искать файл заново. Всё остаётся на устройстве.
-
-const STORE_KEY = "nes-bench.rom";
-const STORE_LIMIT = 1_500_000;
-
-interface StoredRom {
-  name: string;
-  b64: string;
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let s = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(s);
-}
-
-function fromBase64(b64: string): Uint8Array {
-  const raw = atob(b64);
-  const out = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
-  return out;
-}
-
-function saveRom(name: string, bytes: Uint8Array): void {
-  if (bytes.length > STORE_LIMIT) return;
-  try {
-    const payload: StoredRom = { name, b64: toBase64(bytes) };
-    localStorage.setItem(STORE_KEY, JSON.stringify(payload));
-  } catch {
-    // Переполнение или приватный режим — не критично, просто не сохраняем.
-  }
-}
-
-function loadSavedRom(): { name: string; bytes: Uint8Array } | null {
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredRom;
-    return { name: parsed.name, bytes: fromBase64(parsed.b64) };
-  } catch {
-    return null;
-  }
-}
-
 // --- приём файла ------------------------------------------------------------
 
-const dropZone = $("drop");
-const romInput = $<HTMLInputElement>("rom-input");
 const pickError = $("pick-error");
 
-function fail(message: string): void {
-  pickError.textContent = message;
-  pickError.hidden = false;
-}
-
-/** Проверяем заголовок iNES, чтобы не ловить невнятную ошибку внутри ядра. */
-function isValidRom(bytes: Uint8Array): boolean {
-  return (
-    bytes.length > 16 &&
-    bytes[0] === 0x4e &&
-    bytes[1] === 0x45 &&
-    bytes[2] === 0x53 &&
-    bytes[3] === 0x1a
-  );
-}
-
-async function acceptFile(file: File): Promise<void> {
-  pickError.hidden = true;
-  if (file.size > 4_000_000) {
-    fail("Файл больше 4 МБ — это не похоже на образ NES.");
-    return;
-  }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (!isValidRom(bytes)) {
-    fail("Это не файл iNES: нет сигнатуры NES в начале. Нужен .nes.");
-    return;
-  }
-  saveRom(file.name, bytes);
-  void begin(bytes, file.name);
-}
-
-dropZone.addEventListener("click", () => romInput.click());
-romInput.addEventListener("change", () => {
-  const file = romInput.files?.[0];
-  if (file) void acceptFile(file);
-});
-
-for (const type of ["dragenter", "dragover"]) {
-  dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    dropZone.classList.add("over");
-  });
-}
-for (const type of ["dragleave", "drop"]) {
-  dropZone.addEventListener(type, (e) => {
-    e.preventDefault();
-    dropZone.classList.remove("over");
-  });
-}
-dropZone.addEventListener("drop", (e) => {
-  const file = (e as DragEvent).dataTransfer?.files?.[0];
-  if (file) void acceptFile(file);
+setupRomPicker({
+  dropZone: $("drop"),
+  input: $<HTMLInputElement>("rom-input"),
+  savedButton: $<HTMLButtonElement>("use-saved"),
+  onError: (message) => {
+    pickError.textContent = message;
+    pickError.hidden = false;
+  },
+  onRom: (bytes, name) => {
+    pickError.hidden = true;
+    void begin(bytes, name);
+  },
 });
 
 // --- прогон -----------------------------------------------------------------
@@ -154,7 +60,8 @@ async function begin(rom: Uint8Array, name: string): Promise<void> {
   const canvas = $<HTMLCanvasElement>("bench-canvas");
   const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) {
-    fail("Браузер не даёт 2D-контекст canvas.");
+    pickError.textContent = "Браузер не даёт 2D-контекст canvas.";
+    pickError.hidden = false;
     show("pick");
     return;
   }
@@ -317,7 +224,7 @@ $("copy-result").addEventListener("click", async () => {
 
 $("restart").addEventListener("click", () => {
   pickError.hidden = true;
-  romInput.value = "";
+  $<HTMLInputElement>("rom-input").value = "";
   show("pick");
 });
 
@@ -347,13 +254,3 @@ $("live-back").addEventListener("click", () => {
   liveSession = null;
   show("result");
 });
-
-// --- восстановление прошлого ROM --------------------------------------------
-
-const saved = loadSavedRom();
-if (saved) {
-  const button = $<HTMLButtonElement>("use-saved");
-  button.hidden = false;
-  button.textContent = `Прогнать снова: ${saved.name}`;
-  button.addEventListener("click", () => void begin(saved.bytes, saved.name));
-}

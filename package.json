@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "jsnes": "^2.1.0"
+    "jsnes": "^2.1.0",
+    "peerjs": "^1.5.5"
   },
   "devDependencies": {
     "typescript": "^5.9.3",

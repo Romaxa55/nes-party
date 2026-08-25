@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -12,5 +13,14 @@ export default defineConfig({
   build: {
     target: "es2020",
     outDir: "dist",
+    rollupOptions: {
+      // Четыре независимые страницы: лендинг, хост, клиент, бенчмарк.
+      input: {
+        index: fileURLToPath(new URL("index.html", import.meta.url)),
+        host: fileURLToPath(new URL("host.html", import.meta.url)),
+        join: fileURLToPath(new URL("join.html", import.meta.url)),
+        bench: fileURLToPath(new URL("bench.html", import.meta.url)),
+      },
+    },
   },
 });
