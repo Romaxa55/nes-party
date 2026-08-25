@@ -79,6 +79,7 @@ export class AudioPipe {
   private pending: Float32Array;
   private pendingFrames = 0;
   private workletLevel = 0;
+  private wake: (() => void) | null = null;
 
   private constructor(
     private ctx: AudioContext,
@@ -95,40 +96,45 @@ export class AudioPipe {
   }
 
   /**
-   * Лучше создавать из обработчика клика. Если жеста не было (например,
-   * ROM загружен по ссылке ?rom=), контекст останется suspended — тогда
-   * добудим его при первом касании или клавише.
+   * Лучше создавать из обработчика клика, но переживёт и автозагрузку
+   * (?rom=): suspended-контекст добуживается при первом касании/клавише.
+   * Слушатели постоянные — iOS умеет приостанавливать контекст и позже
+   * (фон, звонок) — и снимаются в close().
    */
   static async create(): Promise<AudioPipe> {
     const ctx = new AudioContext();
-    void ctx.resume().catch(() => {});
-    if (ctx.state === "suspended") {
-      const wake = (): void => {
-        void ctx.resume().catch(() => {});
-      };
-      window.addEventListener("pointerdown", wake, { once: true });
-      window.addEventListener("keydown", wake, { once: true });
-    }
+    ctx.resume().catch(() => {});
 
+    let node: AudioWorkletNode;
     const url = URL.createObjectURL(
       new Blob([WORKLET_SOURCE], { type: "application/javascript" }),
     );
     try {
       await ctx.audioWorklet.addModule(url);
+      node = new AudioWorkletNode(ctx, "nes-audio", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+    } catch (err) {
+      void ctx.close().catch(() => {});
+      throw err;
     } finally {
       URL.revokeObjectURL(url);
     }
 
-    const node = new AudioWorkletNode(ctx, "nes-audio", {
-      numberOfInputs: 0,
-      numberOfOutputs: 1,
-      outputChannelCount: [2],
-    });
     const dest = ctx.createMediaStreamDestination();
     node.connect(ctx.destination); // локальный звук хоста
     node.connect(dest); // дорожка для трансляции
 
-    return new AudioPipe(ctx, node, dest);
+    const pipe = new AudioPipe(ctx, node, dest);
+    const wake = (): void => {
+      if (ctx.state !== "running") ctx.resume().catch(() => {});
+    };
+    window.addEventListener("pointerdown", wake);
+    window.addEventListener("keydown", wake);
+    pipe.wake = wake;
+    return pipe;
   }
 
   /** Колбэк для NES({ onAudioSample }) — вызывается на каждый сэмпл. */
@@ -143,6 +149,13 @@ export class AudioPipe {
   /** Вызывать после каждого nes.frame(): отправляет накопленное в воркет. */
   flush(): void {
     if (this.pendingFrames === 0) return;
+    // Suspended-контекст не крутит process(): уровень не обновляется,
+    // очередь порта росла бы бесконечно, а после пробуждения звук навсегда
+    // отставал бы от картинки. Пока не играет — сбрасываем.
+    if (this.ctx.state !== "running") {
+      this.pendingFrames = 0;
+      return;
+    }
     if (this.workletLevel > HIGH_WATER) {
       // Буфер разросся (например, после фриза вкладки) — сбрасываем,
       // чтобы звук не отставал от картинки. Уровень уползает редко.
@@ -155,6 +168,11 @@ export class AudioPipe {
   }
 
   async close(): Promise<void> {
+    if (this.wake) {
+      window.removeEventListener("pointerdown", this.wake);
+      window.removeEventListener("keydown", this.wake);
+      this.wake = null;
+    }
     this.node.disconnect();
     await this.ctx.close();
   }
