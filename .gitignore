@@ -8,3 +8,6 @@ dist/
 *.nes
 *.zip
 roms/
+
+# Скриншоты Playwright в корне проекта
+/*.png
