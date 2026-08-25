@@ -476,54 +476,12 @@ a {
 
 /* --- комната хоста --- */
 
-.room-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.room-label {
-  color: var(--muted);
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.code {
-  font-family: var(--mono);
-  font-size: 34px;
-  font-weight: 700;
-  letter-spacing: 0.22em;
-  color: var(--accent);
-}
-
-.players {
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.host-plays {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.45;
-  margin: 4px 0 8px;
-  cursor: pointer;
-}
-
-.host-plays input {
-  margin-top: 2px;
-  accent-color: var(--accent);
-}
-
-/* Тачпад хоста нужен, только если хост — телефон. На устройствах
-   с мышью прячем: там играют с клавиатуры. */
+/* Тач-управление нужно только на тач-устройствах; с мышью играют
+   с клавиатуры. Дубль с .overlay-pad повышает специфичность: иначе
+   его display:flex, объявленный ниже по файлу, перебивал бы скрытие. */
 @media (pointer: fine) {
-  .touch-only {
+  .touch-only,
+  .overlay-pad.touch-only {
     display: none;
   }
 }
@@ -556,10 +514,6 @@ a {
   border-color: var(--accent);
 }
 
-video.nes-screen {
-  object-fit: contain;
-}
-
 /* --- полноэкранная игровая сцена --- */
 
 .stage {
@@ -585,6 +539,7 @@ video.nes-screen {
   left: 0;
   right: 0;
   display: flex;
+  flex-wrap: wrap; /* в портрете правая плашка переносится, а не уезжает за край */
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
@@ -601,6 +556,8 @@ video.nes-screen {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
   pointer-events: auto;
   background: rgba(10, 12, 20, 0.6);
   backdrop-filter: blur(8px);
@@ -622,6 +579,8 @@ video.nes-screen {
 .hud-muted {
   color: var(--muted);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
 }
 
@@ -772,7 +731,7 @@ video.nes-screen {
   display: none;
 }
 
-@media (orientation: portrait) {
+@media (orientation: portrait) and (pointer: coarse) {
   .stage .rotate-hint {
     display: block;
     position: absolute;

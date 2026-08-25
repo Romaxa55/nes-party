@@ -13,7 +13,9 @@ export const $ = <T extends HTMLElement>(id: string): T => {
  * даёт CSS).
  */
 export function setupFullscreenButton(button: HTMLElement): void {
-  if (!document.documentElement.requestFullscreen) {
+  // fullscreenEnabled ловит и запрет через Permissions-Policy/iframe,
+  // а не только отсутствие метода.
+  if (!document.fullscreenEnabled || !document.documentElement.requestFullscreen) {
     button.hidden = true;
     return;
   }
@@ -25,10 +27,12 @@ export function setupFullscreenButton(button: HTMLElement): void {
     document.documentElement
       .requestFullscreen({ navigationUI: "hide" })
       .then(() => {
+        // В lib.dom у ScreenOrientation нет lock (Safari его не реализует),
+        // поэтому каст; в рантайме Android он есть.
         const orientation = screen.orientation as unknown as {
           lock?: (o: string) => Promise<void>;
         };
-        orientation.lock?.("landscape").catch(() => {});
+        return orientation.lock?.("landscape");
       })
       .catch(() => {});
   });
