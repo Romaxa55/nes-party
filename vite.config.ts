@@ -12,5 +12,14 @@ export default defineConfig({
   build: {
     target: "es2020",
     outDir: "dist",
+    rollupOptions: {
+      // Четыре независимые страницы: лендинг, хост, клиент, бенчмарк.
+      input: {
+        index: new URL("index.html", import.meta.url).pathname,
+        host: new URL("host.html", import.meta.url).pathname,
+        join: new URL("join.html", import.meta.url).pathname,
+        bench: new URL("bench.html", import.meta.url).pathname,
+      },
+    },
   },
 });
