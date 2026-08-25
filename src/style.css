@@ -474,6 +474,23 @@ a {
   color: var(--accent);
 }
 
+/* --- галерея игр на экране выбора --- */
+
+.gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.gallery-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 2px;
+}
+
 /* --- комната хоста --- */
 
 /* Тач-управление нужно только на тач-устройствах; с мышью играют

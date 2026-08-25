@@ -64,6 +64,21 @@ Local scenario: put a file into `public/roms/` (the folder is in
 `.gitignore` and never reaches git) and open `host.html?rom=/roms/name.nes`
 on the dev server.
 
+### ROM gallery
+
+If the server has `/roms/index.json`, the host page shows a game gallery —
+tap a title and play. The manifest lists entries as
+`{ "name": "...", "file": "game.nes.b64" }`; `.b64` files are base64-encoded
+ROMs (decoded in the browser — this is how binaries travel through
+text-only upload channels). The manifest exists only where the owner put
+it: local `public/roms/` or their own VM — never in the repository or on
+shared hosting.
+
+`scripts/vibhost-upload-roms.sh` uploads `public/roms/*.b64` + the manifest
+to the VibHost VM (needs `VHP_TOKEN`). Re-run it after every
+`vh_redeploy_project` — a redeploy re-clones the repository and the
+uploaded files are not part of it.
+
 ## Benchmark
 
 The **Device benchmark** page answers whether a device can emulate the NES
