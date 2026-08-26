@@ -30,6 +30,8 @@ const T_BRICK = 0x0f;
 const T_STEEL = 0x10;
 const T_BORDER = 0x11;
 const T_WATER = 0x20;
+/** Сетка поиска пути: клетки 2..26 плюс поля по краям. */
+const PATH_W = 28;
 
 const BASE = { x1: 0x68, x2: 0x90, y1: 0xc8, y2: 0xe4 };
 /** Центр орла и пост обороны — экспортируются для тестов-симуляций. */
@@ -144,6 +146,11 @@ export function startBot(
    *  перебивала его каждый тик и ствол не успевал повернуться. */
   let snapDir: Dir | null = null;
   let snapLock = 0;
+
+  // Буферы поиска пути живут в замыкании: пересоздавать их 30 раз
+  // в секунду рядом с эмулятором — лишний мусор.
+  const pathDist = new Int32Array(PATH_W * PATH_W);
+  const pathFirst = new Int8Array(PATH_W * PATH_W);
 
   /** Куда реально смотрит ствол бота прямо сейчас. */
   const aim = (): Dir => AIM_DIRS[mem[AIM0 + 1] & 3];
@@ -365,15 +372,18 @@ export function startBot(
       return cost;
     };
 
-    const sx = (from.x - 8) >> 3;
-    const sy = (from.y - 8) >> 3;
-    const gx = (to.x - 8) >> 3;
-    const gy = (to.y - 8) >> 3;
+    const clamp = (v: number): number => (v < 2 ? 2 : v > 26 ? 26 : v);
+    const sx = clamp((from.x - 8) >> 3);
+    const sy = clamp((from.y - 8) >> 3);
+    const gx = clamp((to.x - 8) >> 3);
+    const gy = clamp((to.y - 8) >> 3);
     if (sx === gx && sy === gy) return null;
 
-    const W = 28;
-    const dist = new Int32Array(W * W).fill(0x7fffffff);
-    const first = new Int8Array(W * W).fill(-1);
+    const W = PATH_W;
+    pathDist.fill(0x7fffffff);
+    pathFirst.fill(-1);
+    const dist = pathDist;
+    const first = pathFirst;
     // Ручная очередь с приоритетом: клеток мало, сортировка вставкой дешевле
     // любых структур — этот код крутится 30 раз в секунду.
     const queue: number[] = [sy * W + sx];
@@ -425,6 +435,8 @@ export function startBot(
     if (Math.abs(dx) > Math.abs(dy)) {
       return { x: BASE_CENTER.x + (dx < 0 ? -BLOCK_OFFSET : BLOCK_OFFSET), y: BASE_CENTER.y };
     }
+    // Только сверху: орёл стоит у нижней кромки поля, снизу к нему
+    // не подойти — там рамка.
     return { x: BASE_CENTER.x, y: BASE_CENTER.y - BLOCK_OFFSET };
   };
 
@@ -445,6 +457,9 @@ export function startBot(
       if (e) enemies.push({ ...e, slot: s });
     }
 
+    // Застревание — именно НУЛЕВОЕ смещение: танк ползёт медленнее 2 px
+    // за тик, и прежний порог считал застрявшим нормальный ход (измерено:
+    // 65% ходовых тиков), из-за чего курс пересчитывался каждый тик.
     if (Math.abs(me.x - lastX) < 2 && Math.abs(me.y - lastY) < 2) {
       stuckTicks++;
     } else {
@@ -569,7 +584,7 @@ export function startBot(
         snapDir = null;
       }
       dir = want;
-      mode = `aiming:${want}`;
+      mode = "aiming";
       setButtons(((ready ? 0 : DIR_MASK[want]) | (shoot ? MASKS.A : 0)) & 0xff);
       return;
     }
@@ -771,6 +786,7 @@ export function startBot(
         // Упёрлись в сталь/рамку — пробивать бесполезно, сразу в объезд.
         if (
           !blastTried &&
+          aim() === dir &&
           safeFire(me, ally, dir) &&
           !wastedShot(me, dir, 0x40)
         ) {

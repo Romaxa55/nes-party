@@ -46,8 +46,8 @@ const EMPTY = 0xff;
 
 interface Metrics {
   scenario: string;
+  /** Сколько секунд длился засчитанный бой (до падения орла). */
   battleSec: number;
-  baseSurvivedSec: number;
   eagleOk: boolean;
   shots: number;
   shotsAt: { steel: number; brick: number; foe: number; void: number };
@@ -270,9 +270,10 @@ function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
       const jump =
         Math.abs(bmx - prevBotPos.x) + Math.abs(bmy - prevBotPos.y);
       if (jump > 0x40) botDeaths++;
+    } else if (!botAlive && prevBotAlive) {
+      botDeaths++; // редкий случай, когда слот всё же обнулился
     }
     prevBotPos = botAlive ? { x: bmx, y: bmy } : null;
-    if (!botAlive && prevBotAlive) botDeaths++;
     prevBotAlive = botAlive;
 
     if (botAlive) {
@@ -310,7 +311,6 @@ function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
   return {
     scenario: p1Style,
     battleSec,
-    baseSurvivedSec: +((baseFellFrame ?? total) / 60).toFixed(1),
     eagleOk: baseFellFrame === null,
     shots,
     shotsAt,
@@ -333,7 +333,7 @@ console.log(JSON.stringify(results, null, 2));
 const totalShots = results.reduce((a, r) => a + r.shots, 0);
 const steel = results.reduce((a, r) => a + r.shotsAt.steel, 0);
 const avgSurvived =
-  results.reduce((a, r) => a + r.baseSurvivedSec, 0) / results.length;
+  results.reduce((a, r) => a + r.battleSec, 0) / results.length;
 const deaths = results.reduce((a, r) => a + r.botDeaths, 0);
 console.log(
   `summary: shots ${totalShots}, steel ${steel}, ` +
@@ -350,8 +350,14 @@ if (steel > Math.max(2, totalShots * 0.05)) {
 }
 // Пороги — регрессионные, с запасом ниже замеров текущего бота
 // (77 с и 0 смертей) и заметно выше предыдущего (55 с, 4 смерти).
-if (avgSurvived < 60) {
-  failures.push(`base fell too early: ${avgSurvived.toFixed(0)}s on average`);
+// Порог нормируем длиной прогона: baseSurvivedSec сверху ограничен ей,
+// иначе короткий прогон падал бы всегда (`test:bot 30` — никогда не OK).
+const survivalTarget = Math.min(60, SECONDS * 0.9);
+if (avgSurvived < survivalTarget) {
+  failures.push(
+    `base fell too early: ${avgSurvived.toFixed(0)}s on average, ` +
+      `expected ${survivalTarget.toFixed(0)}s`,
+  );
 }
 if (deaths > 2) failures.push(`bot died too often: ${deaths}`);
 if (failures.length) {
