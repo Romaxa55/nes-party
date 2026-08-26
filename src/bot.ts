@@ -84,6 +84,10 @@ const ENGAGE_RADIUS = 0x60;
  *  поводок не включался, и бот вечно гонялся по всей карте. */
 const BREACH_Y = 0x88;
 const BREACH_RADIUS = 0x80;
+/** Нижний коридор — автобан к орлу: враг там — прорыв независимо от
+ *  дистанции (полевой кейс: спустился по краю, доехал низом и снёс базу,
+ *  пока манхэттен-тревога молчала до последних 4 секунд). */
+const LOW_LANE_Y = 0xbe;
 /** Кирпичная коробка вокруг орла в тайлах: её нельзя ни грызть, ни
  *  прокладывать через неё маршрут — своими же руками открыли бы
  *  врагам дорогу к флагу. */
@@ -752,9 +756,10 @@ export function startBot(
     const myLeash =
       Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
     const isBreach = (e: Enemy): boolean =>
-      e.y >= BREACH_Y &&
-      Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
-        BREACH_RADIUS;
+      e.y >= LOW_LANE_Y ||
+      (e.y >= BREACH_Y &&
+        Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
+          BREACH_RADIUS);
     const breachNow = enemies.some(isBreach);
     const atPost =
       Math.abs(me.x - ANCHOR.x) <= HOME_RADIUS &&
