@@ -11,3 +11,6 @@ roms/
 
 # Скриншоты Playwright в корне проекта
 /*.png
+
+# Видеозаписи тестовых боёв бота (генерируются scripts/bot-replay.mts)
+replays/

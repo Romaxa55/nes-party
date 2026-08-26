@@ -10,7 +10,8 @@
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
     "test:fourscore": "node --import tsx scripts/fourscore-test.mts",
-    "test:bot": "node --import tsx scripts/bot-sim.mts"
+    "test:bot": "node --import tsx scripts/bot-sim.mts",
+    "replay:bot": "node --import tsx scripts/bot-replay.mts"
   },
   "dependencies": {
     "jsnes": "^2.1.0",

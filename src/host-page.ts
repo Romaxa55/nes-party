@@ -104,6 +104,8 @@ const queryGg = (query.get("gg") ?? "")
 // ?tv=1 — хост не играет, оба контроллера уходят клиентам.
 const preferredRoom = query.get("room") ?? undefined;
 const tvMode = query.get("tv") === "1";
+// ?botdebug=1 — показывать в HUD режим решения бота (полевые отчёты).
+const botDebug = query.get("botdebug") === "1";
 if (tvMode) hostPlays = false;
 
 async function begin(
@@ -144,7 +146,8 @@ async function begin(
       onStats: (s) => {
         hostStats.textContent =
           `${s.fps.toFixed(0)} fps · frame ${ms(s.frameMs)} ms` +
-          (s.droppedSteps ? ` · dropped ${s.droppedSteps}` : "");
+          (s.droppedSteps ? ` · dropped ${s.droppedSteps}` : "") +
+          (botDebug && bot && !bot.paused ? ` · bot:${bot.mode}` : "");
       },
       onError: (err) => {
         netStatus.textContent = `The emulator crashed: ${err.message}. Reload the page.`;
