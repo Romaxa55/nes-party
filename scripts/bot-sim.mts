@@ -49,6 +49,8 @@ interface Metrics {
   seed: number;
   /** Частота режимов решения — видно, какие ветки бота реально живут. */
   modes: Record<string, number>;
+  /** Развороты ствола за минуту боя — мера «крутится туда-сюда». */
+  turnsPerMin: number;
   /** Уровень пройден: все 20 танков убиты, игра ушла на stage 2. */
   stageCleared: boolean;
   /** Сколько секунд длился засчитанный бой (до падения орла). */
@@ -125,6 +127,8 @@ function runBattle(
   let stageCleared = false;
   let clearedFrame: number | null = null;
   const modes: Record<string, number> = {};
+  let turns = 0;
+  let prevAim = -1;
 
   let prevBotBullet: { x: number; y: number } | null = null;
   let pendingShot: {
@@ -328,6 +332,11 @@ function runBattle(
       bot.tick();
       const m = bot.mode.split(":")[0];
       modes[m] = (modes[m] ?? 0) + 1;
+      if (baseFellFrame === null && !stageCleared) {
+        const a = mem[0xa1] & 3;
+        if (prevAim >= 0 && a !== prevAim) turns++;
+        prevAim = a;
+      }
     }
     sample(f);
   }
@@ -340,6 +349,7 @@ function runBattle(
     seed,
     stageCleared,
     modes,
+    turnsPerMin: battleSec ? +((turns / battleSec) * 60).toFixed(0) : 0,
     battleSec,
     eagleOk: baseFellFrame === null,
     shots,
@@ -376,7 +386,8 @@ for (const style of ["idle", "cover", "cover-fast"] as const) {
       `kills ${median(rows.map((r) => r.kills)).toFixed(0)} median, ` +
       `deaths ${rows.reduce((a, r) => a + r.botDeaths, 0)}, ` +
       `steel ${rows.reduce((a, r) => a + r.shotsAt.steel, 0)}, ` +
-      `cleared ${rows.filter((r) => r.stageCleared).length}/${rows.length}`,
+      `cleared ${rows.filter((r) => r.stageCleared).length}/${rows.length}, ` +
+      `turns/min ${median(rows.map((r) => r.turnsPerMin)).toFixed(0)}`,
   );
 }
 
@@ -406,6 +417,7 @@ console.log(
     `missions ${results.filter((r) => r.stageCleared).length}/${results.length}, ` +
     `base survived ${medianSurvived.toFixed(0)}s median, ` +
     `kills ${medianKills.toFixed(0)} median, ` +
+    `turns/min ${median(results.map((r) => r.turnsPerMin)).toFixed(0)}, ` +
     `on-target ${(
       (results.reduce((a, r) => a + r.shotsAt.foe, 0) / Math.max(1, totalShots)) *
       100

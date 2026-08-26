@@ -169,6 +169,10 @@ export function startBot(
   /** «Ответка»: чья пуля нас гоняла — его пушка пуста, окно для удара. */
   let revengeSlot = -1;
   let revengeTicks = 0;
+  /** Лок цели снайпа: не перевыбирать врага каждый тик — ствол метался
+   *  туда-сюда между целями слева и справа (полевой отчёт «крутится»). */
+  let snapSlot = -1;
+  let snapHold = 0;
 
   // Буферы поиска пути живут в замыкании: пересоздавать их 30 раз
   // в секунду рядом с эмулятором — лишний мусор.
@@ -627,6 +631,7 @@ export function startBot(
     if (targetTicks > 0) targetTicks--;
     if (revengeTicks > 0) revengeTicks--;
     for (let i = 2; i < 8; i++) if (freshSpawn[i] > 0) freshSpawn[i]--;
+    if (snapHold > 0) snapHold--;
 
     // --- Угроза важнее атаки: летящая в нас пуля --------------------------
     // Дружеская (P1) лишь морозит: реагируем только в упор, иначе бот
@@ -796,18 +801,32 @@ export function startBot(
     if (enemies.length > 0) {
       // Кандидат тем лучше, чем «убийственнее»: чистая линия до врага
       // бьёт наверняка, кирпич на пути — только прогрызает проход.
-      let snap: { d: Dir; dist: number; clear: boolean } | null = null;
+      let snap: { d: Dir; dist: number; clear: boolean; slot: number } | null =
+        null;
       const closeEnemy = enemies.some(
         (e) => Math.abs(e.x - me.x) + Math.abs(e.y - me.y) <= SNAP_NEAR_DIST,
       );
+      const barrel = aim();
       /** Угроза в упор важнее красивого дальнего выстрела; дальше —
-       *  предпочитаем чистую линию (убивает), потом ближнюю цель. */
-      const better = (dist: number, clear: boolean): boolean => {
+       *  чистая линия (убивает); дальше — залоченная цель и та, на
+       *  которую ствол УЖЕ смотрит: перевыбор каждый тик крутил танк. */
+      const better = (
+        dist: number,
+        clear: boolean,
+        d: Dir,
+        slot: number,
+      ): boolean => {
         if (!snap) return true;
         const near = dist <= SELF_DEFENSE_DIST;
         const snapNear = snap.dist <= SELF_DEFENSE_DIST;
         if (near !== snapNear) return near;
         if (clear !== snap.clear) return clear;
+        const held = snapHold > 0 && slot === snapSlot;
+        const snapHeld = snapHold > 0 && snap.slot === snapSlot;
+        if (held !== snapHeld) return held;
+        const aimed = d === barrel;
+        const snapAimed = snap.d === barrel;
+        if (aimed !== snapAimed) return aimed;
         return dist < snap.dist;
       };
 
@@ -878,7 +897,7 @@ export function startBot(
         ) {
           continue;
         }
-        if (!better(dist, clear)) continue;
+        if (!better(dist, clear, d, e.slot)) continue;
         if (!safeFire(me, ally, d)) continue;
         // Идём защищать базу: дальний доворот уводил бы с позиции, но
         // выстрел уже наведённым стволом ничего не стоит — он не двигает
@@ -892,17 +911,22 @@ export function startBot(
         ) {
           continue;
         }
-        snap = { d, dist, clear };
+        snap = { d, dist, clear, slot: e.slot };
+      }
+      if (snap) {
+        snapSlot = snap.slot;
+        snapHold = 20; // ~0.7 c держим выбор
       }
       const ready = snap ? aim() === snap.d : false;
       // Ствол наведён, но пушка перезаряжается — тик не выбрасываем:
       // раньше бот в такие моменты просто замирал (измерено: 75-83%
       // тиков снайпа уходило в неподвижность, то есть половина боя).
       // Идём дальше по логике; вернёмся к выстрелу, когда будет чем.
-      // ...но только когда база под угрозой: в спокойный момент стоять
-      // с наведённым стволом безопаснее, чем ездить под пулями
-      // (измерено: безусловная отдача тика — 5 смертей против 1).
-      const idleAim = snap && ready && fireCooldown > 1 && defending;
+      // ...но только когда база под угрозой И цель далеко: с близкой
+      // целью стоим, глядя на неё, — отдача тика навигации на каждой
+      // перезарядке крутила ствол туда-сюда (193 разворота в минуту).
+      const idleAim =
+        snap && ready && fireCooldown > 1 && defending && snap.dist > 0x60;
       if (snap && !idleAim) {
         dir = snap.d;
         dirLock = 3;
@@ -1067,6 +1091,21 @@ export function startBot(
       if (aligned) {
         dir = want;
         dirLock = 0;
+        // Цель на оси и не в упор: стоим и расстреливаем — езда на врага
+        // крутит ствол и ловит пули, а попадать проще с места.
+        const axialDist = Math.max(Math.abs(dx), Math.abs(dy));
+        if (
+          axialDist > 0x20 &&
+          aim() === want &&
+          safeFire(me, ally, want) &&
+          !wastedShot(me, want, axialDist)
+        ) {
+          const shoot = fireCooldown <= 0;
+          if (shoot) fireCooldown = 6;
+          mode = "standoff";
+          setButtons((shoot ? MASKS.A : 0) & 0xff);
+          return;
+        }
       } else if (dirLock <= 0 && want !== dir) {
         dir = want;
         dirLock = 6; // ~0.2 с — не дёргаться
