@@ -24,6 +24,10 @@ const BASE_CENTER = { x: 0x7c, y: 0xd8 };
 
 const TICK_MS = 33; // 30 решений в секунду
 const AIM_TOLERANCE = 6;
+/** Прицел оппортуниста: враг «на линии» для мгновенного доворота. */
+const SNAP_TOLERANCE = 10;
+/** Дальность снайперского рефлекса. */
+const SNAP_RANGE = 0x78;
 const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
@@ -229,6 +233,39 @@ export function startBot(
     dodgeDir = null;
 
     let fire = false;
+
+    // --- Снайперский рефлекс: любой враг на нашей линии — мгновенный
+    // доворот и выстрел, поверх текущих планов. Это «мочить проезжающих»:
+    // навигация к далёкой цели не должна прощать подставившегося рядом.
+    if (enemies.length > 0) {
+      let snap: { d: Dir; dist: number } | null = null;
+      for (const e of enemies) {
+        const ddx = e.x - me.x;
+        const ddy = e.y - me.y;
+        if (Math.abs(ddx) <= SNAP_TOLERANCE && Math.abs(ddy) <= SNAP_RANGE) {
+          const d: Dir = ddy < 0 ? "UP" : "DOWN";
+          if ((!snap || Math.abs(ddy) < snap.dist) && safeFire(me, ally, d)) {
+            snap = { d, dist: Math.abs(ddy) };
+          }
+        } else if (
+          Math.abs(ddy) <= SNAP_TOLERANCE &&
+          Math.abs(ddx) <= SNAP_RANGE
+        ) {
+          const d: Dir = ddx < 0 ? "LEFT" : "RIGHT";
+          if ((!snap || Math.abs(ddx) < snap.dist) && safeFire(me, ally, d)) {
+            snap = { d, dist: Math.abs(ddx) };
+          }
+        }
+      }
+      if (snap) {
+        dir = snap.d;
+        dirLock = 3;
+        const shoot = fireCooldown <= 0;
+        if (shoot) fireCooldown = 6;
+        setButtons((DIR_MASK[dir] | (shoot ? MASKS.A : 0)) & 0xff);
+        return;
+      }
+    }
 
     if (enemies.length === 0) {
       // Без врагов — на пост обороны у орла, а не в погоню наверх.
