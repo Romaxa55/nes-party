@@ -5,39 +5,41 @@ import { MASKS, type ButtonMask } from "./controls";
  * Бот для Battle City: играет на слоте P2, читая память консоли напрямую.
  *
  * Карта RAM снята реверсом на официальном дампе (Namcot Collection) и
- * проверена живым вводом: массив X-координат танков в $90-$97, Y — в
- * $98-$9F; слот 0 — P1, слот 1 — P2, слоты 2-7 — враги; 0xFF — слот пуст.
+ * проверена живым вводом: X танков $90-$97, Y $98-$9F (слот 0 — P1,
+ * слот 1 — P2, слоты 2-7 — враги, 0xFF — пусто); пули в тех же слотах:
+ * X $B8+слот, Y $C2+слот.
  *
- * Железные правила безопасности: бот НИКОГДА не стреляет, если на линии
- * огня союзник (P1) или зона базы — пуля по орлу означает game over,
- * пуля по напарнику — заморозку.
- *
- * Тактика: защита базы прежде всего (цель — враг, ближайший к орлу),
- * гистерезис направления (не дёргается), при застревании простреливает
- * кирпич перед собой (если безопасно) и объезжает перпендикуляром.
+ * Железные правила: бот НИКОГДА не стреляет, если на линии огня союзник
+ * или зона базы. Тик 30 Гц — реакции на пулю в упор хватает.
  */
 
 const X0 = 0x90;
 const Y0 = 0x98;
-// Пули — те же слоты, что танки (0=P1, 1=P2, 2-7 враги); реверс подтверждён:
-// выстрел P2 оживил $B9/$C3, вражеские снаряды летают в слотах 2-7.
 const BX0 = 0xb8;
 const BY0 = 0xc2;
 const EMPTY = 0xff;
 
-// Зона орла: центр нижнего ряда поля (эмпирически по стартовым позициям:
-// P1 спавн x=0x58, P2 x=0x98, база между ними).
 const BASE = { x1: 0x68, x2: 0x90, y1: 0xc8, y2: 0xe4 };
 const BASE_CENTER = { x: 0x7c, y: 0xd8 };
 
-/** Насколько «на одной линии» должны быть танки, чтобы стрелять. */
+const TICK_MS = 33; // 30 решений в секунду
 const AIM_TOLERANCE = 6;
-/** Радиус союзника, в который стрелять нельзя. */
 const ALLY_RADIUS = 12;
+/** Враг ближе этого — самозащита важнее охраны базы. */
+const SELF_DEFENSE_DIST = 0x30;
 
 interface Tank {
   x: number;
   y: number;
+}
+
+interface Enemy extends Tank {
+  slot: number;
+}
+
+interface Bullet extends Tank {
+  dx: number;
+  dy: number;
 }
 
 type Dir = "UP" | "DOWN" | "LEFT" | "RIGHT";
@@ -50,7 +52,6 @@ const DIR_MASK: Record<Dir, ButtonMask> = {
 };
 
 export interface Bot {
-  /** Приостановить (живой игрок занял слот) — кнопки отпускаются. */
   pause(): void;
   resume(): void;
   stop(): void;
@@ -66,15 +67,18 @@ export function startBot(
   let paused = false;
   let dir: Dir = "UP";
   let fireCooldown = 0;
-  /** Не менять направление N тиков после поворота — против дёрганья. */
+  /** Гистерезис направления — против дёрганья (в тиках 30 Гц). */
   let dirLock = 0;
-  /** Чередование стороны объезда, чтобы не биться в один угол. */
   let sideToggle = false;
-  /** Одна попытка прострелить препятствие перед объездом. */
   let blastTried = false;
   let lastX = -1;
   let lastY = -1;
   let stuckTicks = 0;
+  /** Выбранное уклонение держится, пока угроза не пройдёт — без дребезга. */
+  let dodgeDir: Dir | null = null;
+  /** Лок цели: не перескакивать между врагами каждый тик. */
+  let targetSlot = -1;
+  let targetTicks = 0;
 
   const read = (slot: number): Tank | null => {
     const x = mem[X0 + slot];
@@ -83,12 +87,6 @@ export function startBot(
     return { x, y };
   };
 
-  // Вражеские пули с вектором движения: направление выводится трекингом
-  // между тиками (за 66 мс снаряд проходит ~8px — надёжно различимо).
-  interface Bullet extends Tank {
-    dx: number;
-    dy: number;
-  }
   const prevBullets: Array<Tank | null> = Array(8).fill(null);
   const readBullets = (): Bullet[] => {
     const out: Bullet[] = [];
@@ -132,7 +130,6 @@ export function startBot(
     }
   };
 
-  /** Можно ли стрелять в направлении d: ни союзника, ни базы на линии. */
   const safeFire = (me: Tank, ally: Tank | null, d: Dir): boolean =>
     !(ally && onFireLine(me, ally, d)) && !inBaseLine(me, d);
 
@@ -145,16 +142,18 @@ export function startBot(
   const tick = (): void => {
     if (paused) return;
 
-    const me = read(1); // P2
+    const me = read(1);
     if (!me) {
-      setButtons(0); // ждём респауна
+      setButtons(0);
+      dodgeDir = null;
+      targetSlot = -1;
       return;
     }
-    const ally = read(0); // P1
-    const enemies: Tank[] = [];
+    const ally = read(0);
+    const enemies: Enemy[] = [];
     for (let s = 2; s < 8; s++) {
       const e = read(s);
-      if (e) enemies.push(e);
+      if (e) enemies.push({ ...e, slot: s });
     }
 
     if (Math.abs(me.x - lastX) < 2 && Math.abs(me.y - lastY) < 2) {
@@ -167,27 +166,32 @@ export function startBot(
     lastY = me.y;
 
     if (fireCooldown > 0) fireCooldown--;
+    if (dirLock > 0) dirLock--;
+    if (targetTicks > 0) targetTicks--;
 
-    // Угроза важнее атаки: пуля, летящая к нам по оси с малым поперечным
-    // отклонением и в пределах опасной дистанции.
+    // --- Угроза важнее атаки: летящая в нас пуля --------------------------
     let threat: Bullet | null = null;
     for (const b of readBullets()) {
       const closingX = (b.dx > 0 && b.x < me.x) || (b.dx < 0 && b.x > me.x);
       const closingY = (b.dy > 0 && b.y < me.y) || (b.dy < 0 && b.y > me.y);
-      if (b.dx !== 0 && closingX && Math.abs(b.y - me.y) <= 10 &&
-          Math.abs(b.x - me.x) <= 0x48) {
+      if (
+        b.dx !== 0 && closingX &&
+        Math.abs(b.y - me.y) <= 12 && Math.abs(b.x - me.x) <= 0x58
+      ) {
         threat = b;
         break;
       }
-      if (b.dy !== 0 && closingY && Math.abs(b.x - me.x) <= 10 &&
-          Math.abs(b.y - me.y) <= 0x48) {
+      if (
+        b.dy !== 0 && closingY &&
+        Math.abs(b.x - me.x) <= 12 && Math.abs(b.y - me.y) <= 0x58
+      ) {
         threat = b;
         break;
       }
     }
+
     if (threat) {
-      // Перехват: если ствол уже смотрит навстречу — стреляем (снаряды в
-      // Battle City взаимно уничтожаются), продолжая уходить с линии.
+      // Перехват встречной пули своей (по ТЕКУЩЕМУ направлению ствола).
       const head: Dir =
         threat.dx !== 0
           ? threat.dx > 0
@@ -198,47 +202,72 @@ export function startBot(
             : "DOWN";
       const intercept =
         dir === head && safeFire(me, ally, dir) && fireCooldown <= 0;
-      // Уклонение: перпендикулярно оси полёта, расширяя разрыв с линией.
-      dir =
-        threat.dx !== 0
-          ? me.y <= threat.y
-            ? "UP"
-            : "DOWN"
-          : me.x <= threat.x
-            ? "LEFT"
-            : "RIGHT";
-      dirLock = 2;
-      if (intercept) fireCooldown = 4;
+
+      // Уклонение выбирается ОДИН раз на угрозу и держится до её конца —
+      // пересчёт каждый тик давал дребезг на границе линии.
+      if (!dodgeDir) {
+        dodgeDir =
+          threat.dx !== 0
+            ? me.y <= threat.y
+              ? "UP"
+              : "DOWN"
+            : me.x <= threat.x
+              ? "LEFT"
+              : "RIGHT";
+      }
+      dir = dodgeDir;
+      if (intercept) fireCooldown = 8;
       setButtons((DIR_MASK[dir] | (intercept ? MASKS.A : 0)) & 0xff);
       return;
     }
+    dodgeDir = null;
 
     let fire = false;
 
     if (enemies.length === 0) {
-      // Патруль: держимся верхней половины, подальше от базы.
       if (me.y > 0x60) dir = "UP";
-      if (stuckTicks > 5) {
+      if (stuckTicks > 10) {
         dir = perpendicular(dir);
         stuckTicks = 0;
       }
     } else {
-      // Цель: защита орла важнее погони — враг, ближайший к базе,
-      // с поправкой на расстояние до нас.
-      let target = enemies[0];
-      let best = Infinity;
+      // --- Выбор цели -----------------------------------------------------
+      // 1) Враг в упор — самозащита немедленно, никаких приоритетов базы.
+      // 2) Иначе держим залоченную цель, пока она жива (без перескоков).
+      // 3) Иначе — защита орла: враг, ближайший к базе, с поправкой на нас.
+      let target: Enemy | null = null;
+      let closest: Enemy | null = null;
+      let closestDist = Infinity;
       for (const e of enemies) {
-        const toBase =
-          Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
-        const toMe = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
-        const score = toBase * 2 + toMe;
-        if (score < best) {
-          best = score;
-          target = e;
+        const d = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
+        if (d < closestDist) {
+          closestDist = d;
+          closest = e;
         }
       }
-      const dx = target.x - me.x;
-      const dy = target.y - me.y;
+      if (closest && closestDist <= SELF_DEFENSE_DIST) {
+        target = closest;
+      } else if (targetTicks > 0) {
+        target = enemies.find((e) => e.slot === targetSlot) ?? null;
+      }
+      if (!target) {
+        let best = Infinity;
+        for (const e of enemies) {
+          const toBase =
+            Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
+          const toMe = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
+          const score = toBase * 2 + toMe;
+          if (score < best) {
+            best = score;
+            target = e;
+          }
+        }
+        targetSlot = target!.slot;
+        targetTicks = 20; // ~0.7 c держим выбор
+      }
+
+      const dx = target!.x - me.x;
+      const dy = target!.y - me.y;
 
       let want: Dir;
       const aligned =
@@ -248,35 +277,29 @@ export function startBot(
       else if (Math.abs(dx) > Math.abs(dy)) want = dx < 0 ? "LEFT" : "RIGHT";
       else want = dy < 0 ? "UP" : "DOWN";
 
-      // Цель на мушке — доворот мгновенный; иначе гистерезис против дёрганья.
       if (aligned) {
         dir = want;
         dirLock = 0;
-      } else if (dirLock > 0) {
-        dirLock--;
-      } else if (want !== dir) {
+      } else if (dirLock <= 0 && want !== dir) {
         dir = want;
-        dirLock = 3;
+        dirLock = 6; // ~0.2 с — не дёргаться
       }
 
-      // Застряли: одна попытка прострелить кирпич по курсу (безопасно ли!),
-      // затем объезд перпендикуляром — чередуя сторону.
-      if (stuckTicks > 5) {
+      if (stuckTicks > 10) {
         if (!blastTried && safeFire(me, ally, dir)) {
           blastTried = true;
-          stuckTicks = 3; // дать пуле долететь, не поворачивая
+          stuckTicks = 6; // дать пуле долететь, не поворачивая
           fire = true;
         } else {
           dir = perpendicular(dir);
-          dirLock = 4;
+          dirLock = 8;
           stuckTicks = 0;
           blastTried = false;
         }
       }
 
-      // Боевая стрельба: цель на линии и линия чистая.
       if (
-        onFireLine(me, target, dir) &&
+        onFireLine(me, target!, dir) &&
         safeFire(me, ally, dir) &&
         fireCooldown <= 0
       ) {
@@ -284,12 +307,11 @@ export function startBot(
       }
     }
 
-    if (fire) fireCooldown = 4; // не заливать очередью
-
+    if (fire) fireCooldown = 8;
     setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
   };
 
-  const timer = setInterval(tick, 66); // ~15 решений в секунду
+  const timer = setInterval(tick, TICK_MS);
 
   return {
     get paused() {
