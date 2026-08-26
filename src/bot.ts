@@ -101,6 +101,8 @@ interface Enemy extends Tank {
 interface Bullet extends Tank {
   dx: number;
   dy: number;
+  /** Слот владельца: пуля живёт в слоте своего танка. */
+  slot: number;
   /** Пуля игрока-союзника: морозит, но не убивает — паника не нужна. */
   friendly: boolean;
 }
@@ -164,6 +166,9 @@ export function startBot(
    *  перебивала его каждый тик и ствол не успевал повернуться. */
   let snapDir: Dir | null = null;
   let snapLock = 0;
+  /** «Ответка»: чья пуля нас гоняла — его пушка пуста, окно для удара. */
+  let revengeSlot = -1;
+  let revengeTicks = 0;
 
   // Буферы поиска пути живут в замыкании: пересоздавать их 30 раз
   // в секунду рядом с эмулятором — лишний мусор.
@@ -177,6 +182,26 @@ export function startBot(
     ty >= BASE_WALL.y1 &&
     ty <= BASE_WALL.y2;
 
+  /**
+   * Продолжение траектории (позиция + юнит-направление) приходит в зону
+   * базы: стены орла пробиваются за пару выстрелов, поэтому пуля,
+   * летящая туда, вредна, даже если в нас не попадёт.
+   */
+  const threatensBase = (
+    x: number,
+    y: number,
+    dx: number,
+    dy: number,
+  ): boolean => {
+    if (dy > 0 && x >= BASE.x1 - 4 && x <= BASE.x2 + 4 && y < BASE.y2) {
+      return true;
+    }
+    if (dx !== 0 && y >= BASE.y1 - 4 && y <= BASE.y2 + 4) {
+      return dx > 0 ? x < BASE.x2 : x > BASE.x1;
+    }
+    return false;
+  };
+
   /** Куда смотрит ствол танка в слоте (1 — сам бот). */
   const aimOf = (slot: number): Dir => AIM_DIRS[mem[AIM0 + slot] & 3];
   const aim = (): Dir => aimOf(1);
@@ -186,8 +211,8 @@ export function startBot(
    * нет преграды. Выстрела ещё не было — но он будет, и уходить нужно
    * заранее, а не по факту летящей пули.
    */
-  const underGun = (me: Tank, list: Enemy[]): boolean =>
-    list.some((e) => {
+  const underGun = (me: Tank, list: Enemy[]): Enemy | undefined =>
+    list.find((e) => {
       const d = aimOf(e.slot);
       const dx = me.x - e.x;
       const dy = me.y - e.y;
@@ -289,7 +314,7 @@ export function startBot(
         // Слот переиспользуется без промежуточного FF: склейка конца старой
         // пули с началом новой даёт мусорный вектор — отбрасываем сэмпл.
         if (Math.abs(dx) <= 24 && Math.abs(dy) <= 24) {
-          out.push({ x, y, dx, dy, friendly: s === 0 });
+          out.push({ x, y, dx, dy, slot: s, friendly: s === 0 });
         }
       }
       prevBullets[s] = { x, y };
@@ -593,6 +618,7 @@ export function startBot(
     if (fireCooldown > 0) fireCooldown--;
     if (dirLock > 0) dirLock--;
     if (targetTicks > 0) targetTicks--;
+    if (revengeTicks > 0) revengeTicks--;
 
     // --- Угроза важнее атаки: летящая в нас пуля --------------------------
     // Дружеская (P1) лишь морозит: реагируем только в упор, иначе бот
@@ -619,6 +645,13 @@ export function startBot(
     }
 
     if (threat) {
+      // Запоминаем обидчика: пока его пуля на экране, он безоружен, и
+      // сразу после её пролёта есть окно выйти на линию и убить
+      // (полевой запрос: «пуля пролетела — выскочил и наказал»).
+      if (threat.slot >= 2) {
+        revengeSlot = threat.slot;
+        revengeTicks = 45; // ~1.5 c
+      }
       // Перехват встречной пули своей (по ТЕКУЩЕМУ направлению ствола).
       const head: Dir =
         threat.dx !== 0
@@ -637,6 +670,24 @@ export function startBot(
         // нажатая стрелка везёт танк на пулю. Уклонимся со следующего тика.
         fireCooldown = 8;
         setButtons(MASKS.A);
+        return;
+      }
+
+      // Пуля, которую мы пропустим, продолжит путь в стену орла — стоим
+      // щитом и доворачиваем ствол навстречу, чтобы перебить следующую.
+      // Полевой кейс: бот «прятался от пули», открывал линию, и враг
+      // за два выстрела пробивал кладку и убивал орла.
+      if (
+        threatensBase(
+          threat.x,
+          threat.y,
+          Math.sign(threat.dx),
+          Math.sign(threat.dy),
+        )
+      ) {
+        mode = "shield";
+        // Доворот на месте к пуле: следующий тик intercept её перебьёт.
+        setButtons(aim() === head ? 0 : DIR_MASK[head] & 0xff);
         return;
       }
 
@@ -664,11 +715,21 @@ export function startBot(
     // Под чужим прицелом: уходим с линии ЗАРАНЕЕ, не дожидаясь выстрела.
     // Стрелять при этом можно — если сами уже наведены на обидчика,
     // выстрел разрешит ситуацию быстрее ухода.
-    if (fireCooldown > 0 && underGun(me, enemies)) {
-      const side = perpendicular(aim());
-      mode = "unaim";
-      setButtons(DIR_MASK[side] & 0xff);
-      return;
+    const gunner = fireCooldown > 0 ? underGun(me, enemies) : undefined;
+    if (gunner) {
+      const gd = aimOf(gunner.slot);
+      const [gdx, gdy] = [
+        gd === "LEFT" ? -1 : gd === "RIGHT" ? 1 : 0,
+        gd === "UP" ? -1 : gd === "DOWN" ? 1 : 0,
+      ];
+      // Уходить можно, только если наш уход не откроет линию на базу:
+      // иначе стоим щитом — пусть стреляет в нас, а не в орла.
+      if (!threatensBase(gunner.x, gunner.y, gdx, gdy)) {
+        const side = perpendicular(aim());
+        mode = "unaim";
+        setButtons(DIR_MASK[side] & 0xff);
+        return;
+      }
     }
 
     // Далеко от орла и прорыва нет — приоритет «домой». Считается ДО
@@ -901,6 +962,22 @@ export function startBot(
           mode = "guard";
           setButtons(driveTo(spot, me, ally, 10));
           return;
+        }
+      } else if (
+        revengeTicks > 0 &&
+        enemies.some(
+          (e) =>
+            e.slot === revengeSlot &&
+            Math.abs(e.x - me.x) + Math.abs(e.y - me.y) <= LEASH_DIST,
+        )
+      ) {
+        // Ответка: его пуля только что пролетела — выходим на линию,
+        // пока он перезаряжается.
+        mode = "revenge";
+        target = enemies.find((e) => e.slot === revengeSlot) ?? null;
+        if (target) {
+          targetSlot = target.slot;
+          targetTicks = 15;
         }
       } else if (!homeSick && closest && closestDist <= SELF_DEFENSE_DIST) {
         // Самозащита — отбиться, не преследовать: на пути домой стрельбу

@@ -47,6 +47,10 @@ const EMPTY = 0xff;
 interface Metrics {
   scenario: string;
   seed: number;
+  /** Частота режимов решения — видно, какие ветки бота реально живут. */
+  modes: Record<string, number>;
+  /** Уровень пройден: все 20 танков убиты, игра ушла на stage 2. */
+  stageCleared: boolean;
   /** Сколько секунд длился засчитанный бой (до падения орла). */
   battleSec: number;
   eagleOk: boolean;
@@ -118,6 +122,9 @@ function runBattle(
   let leashFrames = 0;
   let maxLeash = 0;
   let baseFellFrame: number | null = null;
+  let stageCleared = false;
+  let clearedFrame: number | null = null;
+  const modes: Record<string, number> = {};
 
   let prevBotBullet: { x: number; y: number } | null = null;
   let pendingShot: {
@@ -209,7 +216,13 @@ function runBattle(
   };
 
   const sample = (frame: number): void => {
-    if (baseFellFrame !== null) return; // после game over считать нечего
+    if (baseFellFrame !== null || stageCleared) return; // бой уже кончился
+    // Победа: игра перешла на следующий уровень.
+    if (mem[0x85] > 1) {
+      stageCleared = true;
+      clearedFrame = frame;
+      return;
+    }
 
     const botAlive = mem[TANK_X + 1] !== EMPTY && mem[TANK_Y + 1] !== EMPTY;
     if (botAlive && mem[EAGLE_TILE] !== EAGLE_INTACT) {
@@ -311,15 +324,22 @@ function runBattle(
       else if (phase === 24) nes.buttonUp(1, BTN.A as 0);
     }
     nes.frame();
-    if (f % 2 === 0) bot.tick();
+    if (f % 2 === 0) {
+      bot.tick();
+      const m = bot.mode.split(":")[0];
+      modes[m] = (modes[m] ?? 0) + 1;
+    }
     sample(f);
   }
   bot.stop();
 
-  const battleSec = +((baseFellFrame ?? total) / 60).toFixed(1);
+  const endFrame = baseFellFrame ?? clearedFrame ?? total;
+  const battleSec = +(endFrame / 60).toFixed(1);
   return {
     scenario: p1Style,
     seed,
+    stageCleared,
+    modes,
     battleSec,
     eagleOk: baseFellFrame === null,
     shots,
@@ -355,19 +375,35 @@ for (const style of ["idle", "cover", "cover-fast"] as const) {
       `(${Math.min(...bases).toFixed(0)}-${Math.max(...bases).toFixed(0)}), ` +
       `kills ${median(rows.map((r) => r.kills)).toFixed(0)} median, ` +
       `deaths ${rows.reduce((a, r) => a + r.botDeaths, 0)}, ` +
-      `steel ${rows.reduce((a, r) => a + r.shotsAt.steel, 0)}`,
+      `steel ${rows.reduce((a, r) => a + r.shotsAt.steel, 0)}, ` +
+      `cleared ${rows.filter((r) => r.stageCleared).length}/${rows.length}`,
   );
 }
 
 const totalShots = results.reduce((a, r) => a + r.shots, 0);
 const steel = results.reduce((a, r) => a + r.shotsAt.steel, 0);
-const medianSurvived = median(results.map((r) => r.battleSec));
+const medianSurvived = median(
+  results.map((r) => (r.stageCleared ? SECONDS : r.battleSec)),
+);
 const medianKills = median(results.map((r) => r.kills));
 const deaths = results.reduce((a, r) => a + r.botDeaths, 0);
+const modeTotals: Record<string, number> = {};
+for (const r of results) {
+  for (const [k, v] of Object.entries(r.modes)) {
+    modeTotals[k] = (modeTotals[k] ?? 0) + v;
+  }
+}
+console.log(
+  `modes: ${Object.entries(modeTotals)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => `${k}:${v}`)
+    .join(" ")}`,
+);
 console.log(
   `summary: shots ${totalShots}, steel ${steel}, ` +
     `kills ${results.reduce((a, r) => a + r.kills, 0)}, ` +
     `deaths ${deaths}, ` +
+    `missions ${results.filter((r) => r.stageCleared).length}/${results.length}, ` +
     `base survived ${medianSurvived.toFixed(0)}s median, ` +
     `kills ${medianKills.toFixed(0)} median, ` +
     `on-target ${(
