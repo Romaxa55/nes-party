@@ -47,8 +47,8 @@ const ID_PREFIX = "nes-party-";
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 export const CODE_LENGTH = 5;
 const CONNECT_TIMEOUT_MS = 20_000;
-/** Игрок 2 плюс несколько зрителей; дальше — отказ, чтобы не выесть аплинк хоста. */
-const MAX_PEERS = 6;
+/** Зрители сверх игроков; дальше — отказ, чтобы не выесть аплинк хоста. */
+const SPECTATOR_HEADROOM = 4;
 
 /** 0 — зритель, 1-4 — контроллеры NES (3/4 — Four Score в 4P-ромхаках). */
 export type Slot = 0 | 1 | 2 | 3 | 4;
@@ -175,8 +175,6 @@ export class HostSession {
   private stream: MediaStream | null = null;
   private hostPlays = true;
 
-  /** Сколько контроллеров раздавать клиентам (2 обычно, 4 для 4P-ромхаков). */
-  maxPlayers: 2 | 4 = 2;
   /** Ввод от сетевого игрока: слот и маска кнопок. */
   onInput: (slot: 1 | 2 | 3 | 4, mask: ButtonMask) => void = () => {};
   /** Список подключённых изменился. */
@@ -193,6 +191,8 @@ export class HostSession {
   private constructor(
     readonly code: string,
     private peer: Peer,
+    /** Сколько контроллеров раздавать (2 обычно, 4 для 4P-ромхаков). */
+    readonly maxPlayers: 2 | 4,
   ) {
     peer.on("connection", (conn) => this.acceptConnection(conn));
     peer.on("call", (call) => {
@@ -213,7 +213,10 @@ export class HostSession {
    * случайный; с ним (постоянный облачный сервер) сначала пробуем его,
    * при коллизии откатываемся на случайные.
    */
-  static async create(preferredCode?: string): Promise<HostSession> {
+  static async create(
+    preferredCode?: string,
+    maxPlayers: 2 | 4 = 2,
+  ): Promise<HostSession> {
     let lastError: Error = new Error("failed to create a room");
     for (let attempt = 0; attempt < 5; attempt++) {
       const code =
@@ -223,7 +226,7 @@ export class HostSession {
       if (code.length !== CODE_LENGTH) continue;
       try {
         const peer = await openPeer(ID_PREFIX + code);
-        return new HostSession(code, peer);
+        return new HostSession(code, peer, maxPlayers);
       } catch (err) {
         lastError = err as Error;
         if ((err as { type?: string }).type !== "unavailable-id") throw err;
@@ -341,7 +344,7 @@ export class HostSession {
     const existing = this.peers.get(conn.peer);
     if (existing && existing.conn === conn) return;
 
-    if (!existing && this.peers.size >= MAX_PEERS) {
+    if (!existing && this.peers.size >= this.maxPlayers + SPECTATOR_HEADROOM) {
       conn.send({ t: "full" } satisfies Message);
       setTimeout(() => conn.close(), 500); // дать сообщению долететь
       return;
@@ -476,7 +479,7 @@ export class HostSession {
 // ---------------------------------------------------------------------------
 
 export class ClientSession {
-  /** Назначенный слот: 1/2 — играем, 0 — зритель. */
+  /** Назначенный слот: 1-4 — играем, 0 — зритель. */
   slot: Slot | null = null;
   /** Последний измеренный RTT до хоста, мс. */
   rtt: number | null = null;

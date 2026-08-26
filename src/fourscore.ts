@@ -23,6 +23,10 @@ export function enableFourScore(nes: NES): void {
     };
   };
 
+  if (!anyNes.mmap) {
+    throw new Error("enableFourScore must be called after nes.loadROM()");
+  }
+
   anyNes.controllers[3] = new Controller();
   anyNes.controllers[4] = new Controller();
 

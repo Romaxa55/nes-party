@@ -114,7 +114,8 @@ async function begin(
 ): Promise<void> {
   if (started) return;
   started = true;
-  const gg = ggCodes?.length ? ggCodes : queryGg;
+  // ?gg= — ручное переопределение, оно сильнее кодов из манифеста.
+  const gg = queryGg.length ? queryGg : ggCodes;
   const p4 = players4 || query.get("p4") === "1";
   sessionMaxPlayers = p4 ? 4 : 2;
   pickError.hidden = true;
@@ -189,7 +190,7 @@ async function begin(
   netStatus.textContent = "Creating room…";
   let session: HostSession;
   try {
-    session = await HostSession.create(preferredRoom);
+    session = await HostSession.create(preferredRoom, p4 ? 4 : 2);
   } catch (err) {
     netStatus.textContent =
       `Could not create a room (${(err as Error).message}). ` +
@@ -197,8 +198,8 @@ async function begin(
     return;
   }
   sessionRef = session;
-  session.maxPlayers = p4 ? 4 : 2;
   session.setHostPlays(hostPlays); // если чекбокс сняли до регистрации
+  renderPeers(lastPeers); // HUD сразу показывает все места, включая P3/P4
 
   chatSend = (text) => session.sendChat(text);
   session.onChat = (from, text) => chat.addMessage(from, text);
@@ -315,11 +316,15 @@ interface ManifestCheats {
   /** 4-player ромхак: включить Four Score и раздавать 4 слота. */
   p4?: boolean;
 }
-function parseCheats(r: {
+/** Сырая запись из /roms/index.json — все поля недоверенные. */
+interface ManifestRomEntry {
+  name?: unknown;
+  file?: unknown;
   gg?: unknown;
   ram?: unknown;
   p4?: unknown;
-}): ManifestCheats {
+}
+function parseCheats(r: ManifestRomEntry): ManifestCheats {
   return {
     p4: r.p4 === true,
     gg: Array.isArray(r.gg)
@@ -343,9 +348,7 @@ async function cheatsFromManifest(
   try {
     const res = await fetch("/roms/index.json", { credentials: "omit" });
     if (!res.ok) return undefined;
-    const parsed = (await res.json()) as {
-      roms?: Array<{ file?: unknown; gg?: unknown; ram?: unknown; p4?: unknown }>;
-    };
+    const parsed = (await res.json()) as { roms?: ManifestRomEntry[] };
     const file = pathname.split("/").pop();
     const hit = (parsed.roms ?? []).find(
       (r) => typeof r?.file === "string" && r.file === file,
@@ -365,9 +368,9 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
   let cheats: ManifestCheats | undefined;
   try {
     const url = new URL(raw, location.href);
-    if (!ggCodes?.length && !queryGg.length) {
-      cheats = await cheatsFromManifest(url.pathname);
-    }
+    // Манифест читается всегда: p4 и RAM-фризы не зависят от того,
+    // переопределил ли пользователь gg-коды через URL.
+    cheats = await cheatsFromManifest(url.pathname);
     // Отсекает data:, blob: и чужие http: — источники, которых в честной
     // ссылке быть не может.
     if (url.protocol !== "https:" && url.origin !== location.origin) {
@@ -471,4 +474,3 @@ function renderPeers(list: PeerInfo[]): void {
   if (watchers) parts.push(`spectators: ${watchers}`);
   players.textContent = parts.join(" · ");
 }
-

@@ -8,7 +8,9 @@
     "dev": "vite --host",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:fourscore": "node --import tsx scripts/fourscore-test.mts",
+    "test:bot": "node --import tsx scripts/bot-sim.mts"
   },
   "dependencies": {
     "jsnes": "^2.1.0",

@@ -181,6 +181,8 @@ export function startEngine(opts: {
   return {
     nes,
     setButtons(player, mask) {
+      // Слоты 3/4 без players4 уронили бы jsnes — молча игнорируем.
+      if (player > playerCount) return;
       desired[player - 1] = mask & 0xff;
     },
     stop: shutdown,

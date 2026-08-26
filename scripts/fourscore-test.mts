@@ -9,10 +9,19 @@
  * Запуск: node --import tsx scripts/fourscore-test.mts
  */
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { NES } from "jsnes";
 import { enableFourScore } from "../src/fourscore";
 
-const ROM = new Uint8Array(fs.readFileSync("public/roms/bc4.nes"));
+// ROM'ы не в git (см. .gitignore) — на клоне без них тест честно скипается.
+const ROM_PATH = fileURLToPath(
+  new URL("../public/roms/bc4.nes", import.meta.url),
+);
+if (!fs.existsSync(ROM_PATH)) {
+  console.log(`skip: ${ROM_PATH} not found (ROMs are not committed)`);
+  process.exit(0);
+}
+const ROM = new Uint8Array(fs.readFileSync(ROM_PATH));
 const BTN = { SELECT: 2, START: 3, DOWN: 5, RIGHT: 7 };
 
 const nes = new NES({ emulateSound: false, onFrame: () => {} });
