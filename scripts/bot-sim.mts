@@ -64,7 +64,10 @@ interface Metrics {
  * и стреляет в безопасные стороны (проверяет, что бот уклоняется от пуль
  * союзника, но не паникует от них).
  */
-function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
+function runBattle(
+  p1Style: "idle" | "cover" | "cover-fast",
+  seconds: number,
+): Metrics {
   const nes = new NES({ emulateSound: false, onFrame: () => {} });
   nes.loadROM(ROM);
   const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
@@ -293,9 +296,10 @@ function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
   // сама сносила базу за 18 секунд).
   const P1_DIRS = [BTN.UP, BTN.LEFT];
   for (let f = 0; f < total; f++) {
-    if (p1Style === "cover") {
-      const phase = f % 108;
-      const d = P1_DIRS[Math.floor(f / 108) % 2];
+    if (p1Style !== "idle") {
+      const period = p1Style === "cover" ? 108 : 71;
+      const phase = f % period;
+      const d = P1_DIRS[Math.floor(f / period) % 2];
       if (phase === 0) nes.buttonDown(1, d as 0);
       else if (phase === 9) nes.buttonUp(1, d as 0);
       else if (phase === 18) nes.buttonDown(1, BTN.A as 0);
@@ -325,7 +329,7 @@ function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
   };
 }
 
-const results = (["idle", "cover"] as const).map((style) =>
+const results = (["idle", "cover", "cover-fast"] as const).map((style) =>
   runBattle(style, SECONDS),
 );
 console.log(JSON.stringify(results, null, 2));

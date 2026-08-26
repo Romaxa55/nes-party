@@ -44,8 +44,18 @@ const SNAP_TOLERANCE = 10;
 /** В упор допуск шире: пуля широкая, а «проезжающий вплотную» не прощается. */
 const SNAP_TOLERANCE_NEAR = 13;
 const SNAP_NEAR_DIST = 0x40;
-/** Дальность снайперского рефлекса. */
-const SNAP_RANGE = 0x78;
+/** Дальность снайперского рефлекса — вся длина поля: стрельба наведённым
+ *  стволом не двигает танк, так что дальних целей бояться нечего
+ *  (полевой отчёт: «не видит врагов вдали, а мог бы убивать»). */
+const SNAP_RANGE = 0xd0;
+/** Дальше этого выстрел считается «дальним» и требует чистой линии. */
+const LONG_SHOT_DIST = 0x90;
+/** Скорость пули в пикселях за тик бота (2 кадра): замерено на дампе. */
+const BULLET_SPEED = 4;
+/** Ствол доворачивается и стреляет не мгновенно — фора цели, в тиках. */
+const FIRE_LAG = 2;
+/** Дальше этого горизонта (тиков) прогноз движения цели не надёжен. */
+const LEAD_HORIZON = 14;
 const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
@@ -70,6 +80,10 @@ const ENGAGE_RADIUS = 0x60;
  *  поводок не включался, и бот вечно гонялся по всей карте. */
 const BREACH_Y = 0x88;
 const BREACH_RADIUS = 0x80;
+/** Кирпичная коробка вокруг орла в тайлах: её нельзя ни грызть, ни
+ *  прокладывать через неё маршрут — своими же руками открыли бы
+ *  врагам дорогу к флагу. */
+const BASE_WALL = { x1: 12, x2: 17, y1: 25, y2: 27 };
 
 interface Tank {
   x: number;
@@ -152,6 +166,13 @@ export function startBot(
   const pathDist = new Int32Array(PATH_W * PATH_W);
   const pathFirst = new Int8Array(PATH_W * PATH_W);
 
+  /** Тайл принадлежит кирпичной защите орла. */
+  const isBaseWall = (tx: number, ty: number): boolean =>
+    tx >= BASE_WALL.x1 &&
+    tx <= BASE_WALL.x2 &&
+    ty >= BASE_WALL.y1 &&
+    ty <= BASE_WALL.y2;
+
   /** Куда реально смотрит ствол бота прямо сейчас. */
   const aim = (): Dir => AIM_DIRS[mem[AIM0 + 1] & 3];
 
@@ -160,6 +181,44 @@ export function startBot(
     const y = mem[Y0 + slot];
     if (x === EMPTY || y === EMPTY) return null;
     return { x, y };
+  };
+
+  /**
+   * Скорости вражеских танков (пикселей за тик), чтобы стрелять с
+   * упреждением: пуля летит ~4 px/тик, и на другом конце поля цель
+   * успевает уехать на два корпуса, пока пуля в полёте.
+   */
+  const prevEnemyPos: Array<Tank | null> = Array(8).fill(null);
+  const enemyVel: Array<{ vx: number; vy: number }> = Array.from(
+    { length: 8 },
+    () => ({ vx: 0, vy: 0 }),
+  );
+  const trackEnemies = (list: Enemy[]): void => {
+    const seen = new Set<number>();
+    for (const e of list) {
+      seen.add(e.slot);
+      const prev = prevEnemyPos[e.slot];
+      if (prev) {
+        const dx = e.x - prev.x;
+        const dy = e.y - prev.y;
+        // Прыжок — это респавн в слоте, а не движение.
+        if (Math.abs(dx) <= 8 && Math.abs(dy) <= 8) {
+          const v = enemyVel[e.slot];
+          // Сглаживаем: мгновенная разница шумит на ±1 px.
+          v.vx = v.vx * 0.5 + dx * 0.5;
+          v.vy = v.vy * 0.5 + dy * 0.5;
+        } else {
+          enemyVel[e.slot] = { vx: 0, vy: 0 };
+        }
+      }
+      prevEnemyPos[e.slot] = { x: e.x, y: e.y };
+    }
+    for (let s = 2; s < 8; s++) {
+      if (!seen.has(s)) {
+        prevEnemyPos[s] = null;
+        enemyVel[s] = { vx: 0, vy: 0 };
+      }
+    }
   };
 
   const prevBullets: Array<Tank | null> = Array(8).fill(null);
@@ -224,7 +283,17 @@ export function startBot(
           : mem[TILE_BASE + (y >> 3) * 32 + ((x + 2) >> 3)];
       const brick =
         (a >= 1 && a <= T_BRICK) || (b >= 1 && b <= T_BRICK);
-      if (brick) return { kind: "brick", dist: travelled };
+      if (brick) {
+        // Кирпич защиты орла для нас так же непробиваем, как бетон:
+        // прогрызть его — открыть врагам прямую дорогу к флагу.
+        const ax = sx !== 0 ? x >> 3 : (x - 2) >> 3;
+        const ay = sx !== 0 ? (y - 2) >> 3 : y >> 3;
+        const bx = sx !== 0 ? x >> 3 : (x + 2) >> 3;
+        const by = sx !== 0 ? (y + 2) >> 3 : y >> 3;
+        const kind =
+          isBaseWall(ax, ay) || isBaseWall(bx, by) ? "steel" : "brick";
+        return { kind, dist: travelled };
+      }
       if (a === T_STEEL || b === T_STEEL) {
         return { kind: "steel", dist: travelled };
       }
@@ -366,7 +435,11 @@ export function startBot(
         for (let tx = cx; tx <= cx + 1; tx++) {
           const t = mem[TILE_BASE + ty * 32 + tx];
           if (solid(t)) return Infinity;
-          if (t >= 1 && t <= T_BRICK) cost = 8; // прострелить и подождать
+          if (t >= 1 && t <= T_BRICK) {
+            // Через защиту орла не ходим даже ценой крюка.
+            if (isBaseWall(tx, ty)) return Infinity;
+            cost = 8; // прострелить и подождать
+          }
         }
       }
       return cost;
@@ -456,10 +529,11 @@ export function startBot(
       const e = read(s);
       if (e) enemies.push({ ...e, slot: s });
     }
+    trackEnemies(enemies);
 
-    // Застревание — именно НУЛЕВОЕ смещение: танк ползёт медленнее 2 px
-    // за тик, и прежний порог считал застрявшим нормальный ход (измерено:
-    // 65% ходовых тиков), из-за чего курс пересчитывался каждый тик.
+    // Застревание: смещение меньше 2 px за тик. Порог не строгий ноль —
+    // танк и правда ползёт медленно, но «совсем нулевое» смещение
+    // оказалось хуже в бою (измерено: база держалась 47 с вместо 77).
     if (Math.abs(me.x - lastX) < 2 && Math.abs(me.y - lastY) < 2) {
       stuckTicks++;
     } else {
@@ -594,39 +668,94 @@ export function startBot(
     // навигация к далёкой цели не должна прощать подставившегося рядом.
     // За поводком рефлекс урезан: только в упор или попутно дороге домой.
     if (enemies.length > 0) {
-      let snap: { d: Dir; dist: number } | null = null;
+      // Кандидат тем лучше, чем «убийственнее»: чистая линия до врага
+      // бьёт наверняка, кирпич на пути — только прогрызает проход.
+      let snap: { d: Dir; dist: number; clear: boolean } | null = null;
+      const closeEnemy = enemies.some(
+        (e) => Math.abs(e.x - me.x) + Math.abs(e.y - me.y) <= SNAP_NEAR_DIST,
+      );
+      /** Угроза в упор важнее красивого дальнего выстрела; дальше —
+       *  предпочитаем чистую линию (убивает), потом ближнюю цель. */
+      const better = (dist: number, clear: boolean): boolean => {
+        if (!snap) return true;
+        const near = dist <= SELF_DEFENSE_DIST;
+        const snapNear = snap.dist <= SELF_DEFENSE_DIST;
+        if (near !== snapNear) return near;
+        if (clear !== snap.clear) return clear;
+        return dist < snap.dist;
+      };
+
       for (const e of enemies) {
-        const ddx = e.x - me.x;
-        const ddy = e.y - me.y;
-        const tolV =
-          Math.abs(ddy) <= SNAP_NEAR_DIST ? SNAP_TOLERANCE_NEAR : SNAP_TOLERANCE;
-        const tolH =
-          Math.abs(ddx) <= SNAP_NEAR_DIST ? SNAP_TOLERANCE_NEAR : SNAP_TOLERANCE;
-        if (Math.abs(ddx) <= tolV && Math.abs(ddy) <= SNAP_RANGE) {
-          const d: Dir = ddy < 0 ? "UP" : "DOWN";
-          if (
-            (!snap || Math.abs(ddy) < snap.dist) &&
-            (!defending ||
-              Math.abs(ddy) <= SELF_DEFENSE_DIST ||
-              towardsBase(d)) &&
-            safeFire(me, ally, d) &&
-            firstObstacle(me, d, Math.abs(ddy))?.kind !== "steel"
-          ) {
-            snap = { d, dist: Math.abs(ddy) };
-          }
-        } else if (Math.abs(ddy) <= tolH && Math.abs(ddx) <= SNAP_RANGE) {
-          const d: Dir = ddx < 0 ? "LEFT" : "RIGHT";
-          if (
-            (!snap || Math.abs(ddx) < snap.dist) &&
-            (!defending ||
-              Math.abs(ddx) <= SELF_DEFENSE_DIST ||
-              towardsBase(d)) &&
-            safeFire(me, ally, d) &&
-            firstObstacle(me, d, Math.abs(ddx))?.kind !== "steel"
-          ) {
-            snap = { d, dist: Math.abs(ddx) };
-          }
+        const v = enemyVel[e.slot];
+        // Упреждение: пока пуля летит, цель едет. Считаем и по текущей
+        // позиции (враг стоит или едет вдоль оси — бьём сразу), и по
+        // прогнозу (враг пересекает ось — стреляем заранее); годится
+        // любой из вариантов.
+        // Прогноз только на короткий горизонт: враги произвольно меняют
+        // курс, и упреждение «на всю дистанцию» промахивается чаще, чем
+        // помогает (замерено: 65 с против 73 с выживания базы).
+        const flight = Math.min(
+          (Math.abs(e.x - me.x) + Math.abs(e.y - me.y)) / BULLET_SPEED +
+            FIRE_LAG,
+          LEAD_HORIZON,
+        );
+        const px = e.x + v.vx * flight;
+        const py = e.y + v.vy * flight;
+
+        const ddxNow = e.x - me.x;
+        const ddyNow = e.y - me.y;
+        const ddxLead = px - me.x;
+        const ddyLead = py - me.y;
+        const tolOf = (along: number): number =>
+          Math.abs(along) <= SNAP_NEAR_DIST
+            ? SNAP_TOLERANCE_NEAR
+            : SNAP_TOLERANCE;
+
+        const onAxisV =
+          (Math.abs(ddxNow) <= tolOf(ddyNow) ||
+            Math.abs(ddxLead) <= tolOf(ddyLead)) &&
+          Math.abs(ddyNow) <= SNAP_RANGE;
+        const onAxisH =
+          !onAxisV &&
+          (Math.abs(ddyNow) <= tolOf(ddxNow) ||
+            Math.abs(ddyLead) <= tolOf(ddxLead)) &&
+          Math.abs(ddxNow) <= SNAP_RANGE;
+        if (!onAxisV && !onAxisH) continue;
+
+        const d: Dir = onAxisV
+          ? ddyNow < 0
+            ? "UP"
+            : "DOWN"
+          : ddxNow < 0
+            ? "LEFT"
+            : "RIGHT";
+        const dist = onAxisV ? Math.abs(ddyNow) : Math.abs(ddxNow);
+        const block = firstObstacle(me, d, dist);
+        if (block?.kind === "steel") continue; // пуля погибнет впустую
+        const clear = block === null; // до врага ничего не мешает
+        // На экране живёт одна наша пуля: выстрел через всё поле запирает
+        // пушку почти на две секунды. Дальний огонь — только наверняка
+        // (чистая линия) и когда никто не подобрался вплотную.
+        // При обороне дальний огонь запрещён совсем: пуля улетит на
+        // две секунды, а прорыв к орлу нужно встречать заряженным.
+        if (dist > LONG_SHOT_DIST && (!clear || closeEnemy || defending)) {
+          continue;
         }
+        if (!better(dist, clear)) continue;
+        if (!safeFire(me, ally, d)) continue;
+        // Идём защищать базу: дальний доворот уводил бы с позиции, но
+        // выстрел уже наведённым стволом ничего не стоит — он не двигает
+        // танк. Поэтому дальняя цель на обороне разрешена, если ствол
+        // смотрит на неё (или она в упор / по дороге к базе).
+        if (
+          defending &&
+          dist > SELF_DEFENSE_DIST &&
+          !towardsBase(d) &&
+          aim() !== d
+        ) {
+          continue;
+        }
+        snap = { d, dist, clear };
       }
       if (snap) {
         dir = snap.d;
