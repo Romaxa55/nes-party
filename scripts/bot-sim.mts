@@ -1,15 +1,21 @@
 /**
- * Симуляция боя бота в реальном времени (оригинальный bc.nes, 2P-режим,
- * P1 стоит AFK, бот играет P2). Метрики: выстрелы, выстрелы в бетон
- * (не должно быть после фикса), фраги (телепорт слота врага = переспавн),
- * смерти бота, судьба базы.
+ * Экзамен бота Battle City: детерминированный бой без браузера.
  *
- * Запуск: node --import tsx scripts/bot-sim.mts [секунд]
+ * Эмулятор и бот тикаются вручную (ровно 2 кадра на решение бота, как
+ * 60 Гц против 30 Гц в проде), поэтому прогон воспроизводим и идёт
+ * в десятки раз быстрее реального времени. Гоняем несколько сценариев,
+ * отличающихся поведением напарника P1, и печатаем каждый плюс сводку.
+ *
+ * Метрики замораживаются в момент падения орла: после game over игра
+ * показывает счёт и демо, которое само водит «танк P2» по карте, и все
+ * счётчики превратились бы в мусор.
+ *
+ * Запуск: npm run test:bot [секунд-на-сценарий]
  */
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { NES } from "jsnes";
-import { startBot } from "../src/bot";
+import { startBot, ANCHOR, BASE_CENTER, LEASH_DIST } from "../src/bot";
 import { MASKS, type ButtonMask } from "../src/controls";
 
 // ROM'ы не в git — на клоне без них тест честно скипается.
@@ -26,242 +32,336 @@ if (!Number.isFinite(SECONDS) || SECONDS <= 0) {
   console.error(`bad duration: ${process.argv[2] ?? "(none)"}`);
   process.exit(2);
 }
+
 const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
+// RAM Battle City (реверс): танки, пули, тайлы поля.
+const TANK_X = 0x90;
+const TANK_Y = 0x98;
+const BULLET_X = 0xb8;
+const BULLET_Y = 0xc2;
+const TILES = 0x400;
+const EAGLE_TILE = TILES + 26 * 32 + 14; // левый верхний тайл орла
+const EAGLE_INTACT = 0xc8;
+const EMPTY = 0xff;
 
-const nes = new NES({ emulateSound: false, onFrame: () => {} });
-nes.loadROM(ROM);
-const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
+interface Metrics {
+  scenario: string;
+  /** Сколько секунд длился засчитанный бой (до падения орла). */
+  battleSec: number;
+  eagleOk: boolean;
+  shots: number;
+  shotsAt: { steel: number; brick: number; foe: number; void: number };
+  intercepts: number;
+  kills: number;
+  killsPerMin: number;
+  botDeaths: number;
+  leashPct: number;
+  maxLeash: number;
+}
 
-const frames = (n: number) => {
-  for (let i = 0; i < n; i++) nes.frame();
-};
-const tap = (btn: number) => {
-  nes.buttonDown(1, btn as 0);
-  frames(12);
-  nes.buttonUp(1, btn as 0);
-  frames(20);
-};
+/**
+ * Один бой. p1Style задаёт напарника: "idle" — стоит, "cover" — крутится
+ * и стреляет в безопасные стороны (проверяет, что бот уклоняется от пуль
+ * союзника, но не паникует от них).
+ */
+function runBattle(p1Style: "idle" | "cover", seconds: number): Metrics {
+  const nes = new NES({ emulateSound: false, onFrame: () => {} });
+  nes.loadROM(ROM);
+  const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
 
-// Меню: активация -> 2 PLAYERS -> STAGE 1 -> бой.
-frames(240);
-tap(BTN.START);
-tap(BTN.SELECT);
-tap(BTN.START);
-frames(90);
-tap(BTN.START);
-frames(120);
+  const frames = (n: number): void => {
+    for (let i = 0; i < n; i++) nes.frame();
+  };
+  const tapP1 = (btn: number): void => {
+    nes.buttonDown(1, btn as 0);
+    frames(12);
+    nes.buttonUp(1, btn as 0);
+    frames(20);
+  };
 
-// Ввод бота: маска -> buttonDown/Up на P2.
-let applied: ButtonMask = 0;
-const setButtons = (mask: ButtonMask): void => {
-  const changed = applied ^ mask;
-  for (let bit = 0; bit < 8; bit++) {
-    if (!(changed & (1 << bit))) continue;
-    if (mask & (1 << bit)) nes.buttonDown(2, bit as 0);
-    else nes.buttonUp(2, bit as 0);
-  }
-  applied = mask;
-};
+  // Меню: активация -> 2 PLAYERS -> STAGE 1 -> бой.
+  frames(240);
+  tapP1(BTN.START);
+  tapP1(BTN.SELECT);
+  tapP1(BTN.START);
+  frames(90);
+  tapP1(BTN.START);
+  frames(120);
 
-const bot = startBot(nes, setButtons);
-
-// P1 не совсем AFK: периодически стреляет и крутится — без этого фикс
-// «бот уклоняется от пуль игрока» (слот пуль 0) не исполняется ни разу.
-const P1_DIRS = [BTN.UP, BTN.RIGHT, BTN.DOWN, BTN.LEFT];
-let p1Phase = 0;
-const p1Timer = setInterval(() => {
-  const d = P1_DIRS[p1Phase % 4];
-  p1Phase++;
-  nes.buttonDown(1, d as 0);
-  setTimeout(() => {
-    nes.buttonUp(1, d as 0);
-    nes.buttonDown(1, BTN.A as 0);
-    setTimeout(() => nes.buttonUp(1, BTN.A as 0), 100);
-  }, 150);
-}, 1800);
-
-// --- Метрики ---------------------------------------------------------------
-let shots = 0;
-const kinds = { steel: 0, brick: 0, foe: 0, void: 0 };
-let kills = 0;
-let botDeaths = 0;
-let eagleEverBroken = false;
-let prevBotBullet: { x: number; y: number } | null = null;
-const prevEnemy: Array<{ x: number; y: number } | null> = Array(8).fill(null);
-let prevBotAlive = false;
-
-/** Классификация траектории: во что пуля упрётся первым делом.
- *  Ширина пули учитывается (±2 поперёк), скан от самой точки рождения. */
-const classifyPath = (
-  from: { x: number; y: number },
-  dx: number,
-  dy: number,
-): "steel" | "brick" | "foe" | "void" => {
-  const sx = dx < 0 ? -8 : dx > 0 ? 8 : 0;
-  const sy = dy < 0 ? -8 : dy > 0 ? 8 : 0;
-  const foes: Array<{ x: number; y: number }> = [];
-  for (let s = 2; s < 8; s++) {
-    const x = mem[0x90 + s];
-    const y = mem[0x98 + s];
-    if (x !== 0xff && y !== 0xff) foes.push({ x, y });
-  }
-  let cx = from.x;
-  let cy = from.y;
-  for (let t = 0; t < 0xd0; t += 8) {
-    if (cx < 16 || cx > 223 || cy < 16 || cy > 223) return "void";
-    if (foes.some((f) => Math.abs(f.x - cx) <= 10 && Math.abs(f.y - cy) <= 10))
-      return "foe";
-    const a =
-      sx !== 0
-        ? mem[0x400 + ((cy - 2) >> 3) * 32 + (cx >> 3)]
-        : mem[0x400 + (cy >> 3) * 32 + ((cx - 2) >> 3)];
-    const b =
-      sx !== 0
-        ? mem[0x400 + ((cy + 2) >> 3) * 32 + (cx >> 3)]
-        : mem[0x400 + (cy >> 3) * 32 + ((cx + 2) >> 3)];
-    if ((a >= 1 && a <= 0x0f) || (b >= 1 && b <= 0x0f)) return "brick";
-    if (a === 0x10 || b === 0x10) return "steel";
-    if (a === 0x11 || b === 0x11) return "void"; // рамка
-    cx += sx;
-    cy += sy;
-  }
-  return "void";
-};
-let pendingShot: {
-  x: number;
-  y: number;
-  foes: Array<{ x: number; y: number }>;
-  track: Array<{ x: number; y: number }>;
-} | null = null;
-let intercepts = 0;
-let farShots = 0;
-
-/** Вражеские пули в момент выстрела — кандидаты на перехват. */
-const foeBullets = (): Array<{ x: number; y: number }> => {
-  const out: Array<{ x: number; y: number }> = [];
-  for (let s = 0; s < 8; s++) {
-    if (s === 1) continue;
-    const x = mem[0xb8 + s];
-    const y = mem[0xc2 + s];
-    if (x !== 0xff && y !== 0xff) out.push({ x, y });
-  }
-  return out;
-};
-
-/** Пуля на луче выстрела ближе 0x60 — считаем выстрел перехватом. */
-const onRay = (
-  from: { x: number; y: number },
-  dx: number,
-  dy: number,
-  foes: Array<{ x: number; y: number }>,
-): boolean =>
-  foes.some((f) => {
-    const rx = f.x - from.x;
-    const ry = f.y - from.y;
-    if (dx !== 0) {
-      return Math.sign(rx) === Math.sign(dx) && Math.abs(rx) <= 0x60 && Math.abs(ry) <= 8;
+  let applied: ButtonMask = 0;
+  const setButtons = (mask: ButtonMask): void => {
+    const changed = applied ^ mask;
+    for (let bit = 0; bit < 8; bit++) {
+      if (!(changed & (1 << bit))) continue;
+      if (mask & (1 << bit)) nes.buttonDown(2, bit as 0);
+      else nes.buttonUp(2, bit as 0);
     }
-    return Math.sign(ry) === Math.sign(dy) && Math.abs(ry) <= 0x60 && Math.abs(rx) <= 8;
-  });
+    applied = mask;
+  };
+  const bot = startBot(nes, setButtons, { autoTick: false });
 
-const sample = (): void => {
-  // Выстрел бота: пуля слота 1 (пуля P2) появилась ИЛИ телепортировалась
-  // назад к танку — при непрерывном огне слот не успевает освобождаться.
-  const bx = mem[0xb8 + 1];
-  const by = mem[0xc2 + 1];
-  const bulletAlive = bx !== 0xff && by !== 0xff;
-  if (bulletAlive) {
-    const isNew =
-      !prevBotBullet ||
-      Math.abs(bx - prevBotBullet.x) + Math.abs(by - prevBotBullet.y) > 16;
-    if (isNew) {
-      // Пуля, родившаяся не у нашего танка, — чужая (слот делится?).
-      const mx = mem[0x91];
-      const my = mem[0x99];
-      const near =
-        mx !== 0xff &&
-        my !== 0xff &&
-        Math.abs(bx - mx) + Math.abs(by - my) <= 24;
-      if (!near) {
-        farShots++;
-        pendingShot = null;
-      } else {
-        shots++;
-        // направление узнаем по стабильной дельте (2-я -> 4-я позиция):
-        // первая дельта может склеить конец старой пули с началом новой
-        pendingShot = { x: bx, y: by, foes: foeBullets(), track: [] };
+  // --- Метрики ---
+  let shots = 0;
+  const shotsAt = { steel: 0, brick: 0, foe: 0, void: 0 };
+  let intercepts = 0;
+  let kills = 0;
+  let botDeaths = 0;
+  let battleFrames = 0;
+  let leashFrames = 0;
+  let maxLeash = 0;
+  let baseFellFrame: number | null = null;
+
+  let prevBotBullet: { x: number; y: number } | null = null;
+  let pendingShot: {
+    x: number;
+    y: number;
+    foes: Array<{ x: number; y: number }>;
+    track: Array<{ x: number; y: number }>;
+  } | null = null;
+  const prevEnemy: Array<{ x: number; y: number } | null> = Array(8).fill(null);
+  let prevBotAlive = false;
+  let prevBotPos: { x: number; y: number } | null = null;
+
+  const enemyTanks = (): Array<{ x: number; y: number }> => {
+    const out: Array<{ x: number; y: number }> = [];
+    for (let s = 2; s < 8; s++) {
+      const x = mem[TANK_X + s];
+      const y = mem[TANK_Y + s];
+      if (x !== EMPTY && y !== EMPTY) out.push({ x, y });
+    }
+    return out;
+  };
+
+  /** Чужие пули в момент выстрела — кандидаты на перехват. */
+  const foeBullets = (): Array<{ x: number; y: number }> => {
+    const out: Array<{ x: number; y: number }> = [];
+    for (let s = 0; s < 8; s++) {
+      if (s === 1) continue; // своя
+      const x = mem[BULLET_X + s];
+      const y = mem[BULLET_Y + s];
+      if (x !== EMPTY && y !== EMPTY) out.push({ x, y });
+    }
+    return out;
+  };
+
+  /** Пуля на луче выстрела — считаем выстрел перехватом. */
+  const onRay = (
+    from: { x: number; y: number },
+    dx: number,
+    dy: number,
+    foes: Array<{ x: number; y: number }>,
+  ): boolean =>
+    foes.some((f) => {
+      const rx = f.x - from.x;
+      const ry = f.y - from.y;
+      if (dx !== 0) {
+        return (
+          Math.sign(rx) === Math.sign(dx) &&
+          Math.abs(rx) <= 0x60 &&
+          Math.abs(ry) <= 8
+        );
       }
-    } else if (pendingShot) {
-      pendingShot.track.push({ x: bx, y: by });
-      if (pendingShot.track.length >= 4) {
-        const p2 = pendingShot.track[1];
-        const p4 = pendingShot.track[3];
-        const dx = p4.x - p2.x;
-        const dy = p4.y - p2.y;
-        // диагональ или стоячая «пуля» — мусорный сэмпл, не классифицируем
-        if ((dx !== 0) !== (dy !== 0)) {
-          if (onRay(pendingShot, dx, dy, pendingShot.foes)) intercepts++;
-          else kinds[classifyPath(pendingShot, dx, dy)]++;
+      return (
+        Math.sign(ry) === Math.sign(dy) &&
+        Math.abs(ry) <= 0x60 &&
+        Math.abs(rx) <= 8
+      );
+    });
+
+  /** Во что упрётся пуля: та же геометрия, что у бота (ширина ±2). */
+  const classifyPath = (
+    from: { x: number; y: number },
+    dx: number,
+    dy: number,
+  ): keyof typeof shotsAt => {
+    const sx = dx < 0 ? -8 : dx > 0 ? 8 : 0;
+    const sy = dy < 0 ? -8 : dy > 0 ? 8 : 0;
+    const foes = enemyTanks();
+    let cx = from.x;
+    let cy = from.y;
+    for (let t = 0; t < 0xd0; t += 8) {
+      if (cx < 16 || cx > 223 || cy < 16 || cy > 223) return "void";
+      if (foes.some((f) => Math.abs(f.x - cx) <= 10 && Math.abs(f.y - cy) <= 10))
+        return "foe";
+      const a =
+        sx !== 0
+          ? mem[TILES + ((cy - 2) >> 3) * 32 + (cx >> 3)]
+          : mem[TILES + (cy >> 3) * 32 + ((cx - 2) >> 3)];
+      const b =
+        sx !== 0
+          ? mem[TILES + ((cy + 2) >> 3) * 32 + (cx >> 3)]
+          : mem[TILES + (cy >> 3) * 32 + ((cx + 2) >> 3)];
+      if ((a >= 1 && a <= 0x0f) || (b >= 1 && b <= 0x0f)) return "brick";
+      if (a === 0x10 || b === 0x10) return "steel";
+      if (a === 0x11 || b === 0x11) return "void"; // рамка поля
+      cx += sx;
+      cy += sy;
+    }
+    return "void";
+  };
+
+  const sample = (frame: number): void => {
+    if (baseFellFrame !== null) return; // после game over считать нечего
+
+    const botAlive = mem[TANK_X + 1] !== EMPTY && mem[TANK_Y + 1] !== EMPTY;
+    if (botAlive && mem[EAGLE_TILE] !== EAGLE_INTACT) {
+      baseFellFrame = frame;
+      return;
+    }
+
+    // Выстрел бота: пуля слота 1 родилась (или слот переиспользован).
+    const bx = mem[BULLET_X + 1];
+    const by = mem[BULLET_Y + 1];
+    if (bx !== EMPTY && by !== EMPTY) {
+      const isNew =
+        !prevBotBullet ||
+        Math.abs(bx - prevBotBullet.x) + Math.abs(by - prevBotBullet.y) > 16;
+      if (isNew) {
+        const mx = mem[TANK_X + 1];
+        const my = mem[TANK_Y + 1];
+        const mine =
+          mx !== EMPTY &&
+          my !== EMPTY &&
+          Math.abs(bx - mx) + Math.abs(by - my) <= 24;
+        if (mine) {
+          shots++;
+          pendingShot = { x: bx, y: by, foes: foeBullets(), track: [] };
+        } else {
+          pendingShot = null;
         }
-        pendingShot = null;
+      } else if (pendingShot) {
+        pendingShot.track.push({ x: bx, y: by });
+        if (pendingShot.track.length >= 4) {
+          // Направление — по устоявшейся дельте: первая склеивает конец
+          // старой пули с началом новой при переиспользовании слота.
+          const dx = pendingShot.track[3].x - pendingShot.track[1].x;
+          const dy = pendingShot.track[3].y - pendingShot.track[1].y;
+          if ((dx !== 0) !== (dy !== 0)) {
+            if (onRay(pendingShot, dx, dy, pendingShot.foes)) intercepts++;
+            else shotsAt[classifyPath(pendingShot, dx, dy)]++;
+          }
+          pendingShot = null;
+        }
       }
+      prevBotBullet = { x: bx, y: by };
+    } else {
+      prevBotBullet = null;
+      pendingShot = null;
     }
-    prevBotBullet = { x: bx, y: by };
-  } else {
-    prevBotBullet = null;
-    pendingShot = null;
-  }
 
-  // фраги: телепорт слота врага (переспавн после смерти)
-  for (let s = 2; s < 8; s++) {
-    const x = mem[0x90 + s];
-    const y = mem[0x98 + s];
-    const alive = x !== 0xff && y !== 0xff;
-    const prev = prevEnemy[s];
-    if (alive && prev) {
-      const jump = Math.abs(x - prev.x) + Math.abs(y - prev.y);
-      if (jump > 0x40) kills++;
+    // Фраги: слот врага телепортировался на спавн — значит его убили
+    // (слоты переиспользуются мгновенно, FF там не появляется).
+    for (let s = 2; s < 8; s++) {
+      const x = mem[TANK_X + s];
+      const y = mem[TANK_Y + s];
+      const alive = x !== EMPTY && y !== EMPTY;
+      const prev = prevEnemy[s];
+      if (alive && prev) {
+        if (Math.abs(x - prev.x) + Math.abs(y - prev.y) > 0x40) kills++;
+      }
+      prevEnemy[s] = alive ? { x, y } : null;
     }
-    prevEnemy[s] = alive ? { x, y } : null;
+
+    // Смерть бота — тоже телепорт на спавн: слот 1 переиспользуется
+    // мгновенно, FF в нём почти не появляется (метрика по FF врала).
+    const bmx = mem[TANK_X + 1];
+    const bmy = mem[TANK_Y + 1];
+    if (botAlive && prevBotPos) {
+      const jump =
+        Math.abs(bmx - prevBotPos.x) + Math.abs(bmy - prevBotPos.y);
+      if (jump > 0x40) botDeaths++;
+    } else if (!botAlive && prevBotAlive) {
+      botDeaths++; // редкий случай, когда слот всё же обнулился
+    }
+    prevBotPos = botAlive ? { x: bmx, y: bmy } : null;
+    prevBotAlive = botAlive;
+
+    if (botAlive) {
+      battleFrames++;
+      const leash =
+        Math.abs(mem[TANK_X + 1] - BASE_CENTER.x) +
+        Math.abs(mem[TANK_Y + 1] - BASE_CENTER.y);
+      if (leash > LEASH_DIST) leashFrames++;
+      if (leash > maxLeash) maxLeash = leash;
+    }
+  };
+
+  // --- Сам бой: 60 кадров/с, решение бота каждые 2 кадра ---
+  const total = Math.round(seconds * 60);
+  // Напарник: цикл «повернуться -> выстрелить» безопасными сторонами.
+  // Стрелять вправо со спавна нельзя — там орёл (первая версия теста
+  // сама сносила базу за 18 секунд).
+  const P1_DIRS = [BTN.UP, BTN.LEFT];
+  for (let f = 0; f < total; f++) {
+    if (p1Style === "cover") {
+      const phase = f % 108;
+      const d = P1_DIRS[Math.floor(f / 108) % 2];
+      if (phase === 0) nes.buttonDown(1, d as 0);
+      else if (phase === 9) nes.buttonUp(1, d as 0);
+      else if (phase === 18) nes.buttonDown(1, BTN.A as 0);
+      else if (phase === 24) nes.buttonUp(1, BTN.A as 0);
+    }
+    nes.frame();
+    if (f % 2 === 0) bot.tick();
+    sample(f);
   }
-
-  // смерти бота
-  const botAlive = mem[0x91] !== 0xff && mem[0x99] !== 0xff;
-  if (!botAlive && prevBotAlive) botDeaths++;
-  prevBotAlive = botAlive;
-
-  // Орёл: «был цел всё время» — мгновенный сэмпл в конце ловил экраны
-  // счёта/смены стадии, где тайлмап другой. Меряем только в бою (бот жив
-  // или только что был жив — на межэкранах слоты танков пусты).
-  if (botAlive && mem[0x400 + 26 * 32 + 14] !== 0xc8) eagleEverBroken = true;
-};
-
-const gameTimer = setInterval(() => {
-  nes.frame();
-  sample();
-}, 16);
-
-setTimeout(() => {
-  clearInterval(gameTimer);
-  clearInterval(p1Timer);
   bot.stop();
-  const eagleOk = !eagleEverBroken;
-  console.log(
-    JSON.stringify(
-      {
-        seconds: SECONDS,
-        shots,
-        farShots,
-        intercepts,
-        shotsAt: kinds,
-        kills,
-        killsPerMin: +(kills / (SECONDS / 60)).toFixed(1),
-        botDeaths,
-        eagleOk,
-      },
-      null,
-      2,
-    ),
+
+  const battleSec = +((baseFellFrame ?? total) / 60).toFixed(1);
+  return {
+    scenario: p1Style,
+    battleSec,
+    eagleOk: baseFellFrame === null,
+    shots,
+    shotsAt,
+    intercepts,
+    kills,
+    killsPerMin: battleSec ? +((kills / battleSec) * 60).toFixed(1) : 0,
+    botDeaths,
+    leashPct: battleFrames
+      ? +((leashFrames / battleFrames) * 100).toFixed(1)
+      : 0,
+    maxLeash,
+  };
+}
+
+const results = (["idle", "cover"] as const).map((style) =>
+  runBattle(style, SECONDS),
+);
+console.log(JSON.stringify(results, null, 2));
+
+const totalShots = results.reduce((a, r) => a + r.shots, 0);
+const steel = results.reduce((a, r) => a + r.shotsAt.steel, 0);
+const avgSurvived =
+  results.reduce((a, r) => a + r.battleSec, 0) / results.length;
+const deaths = results.reduce((a, r) => a + r.botDeaths, 0);
+console.log(
+  `summary: shots ${totalShots}, steel ${steel}, ` +
+    `kills ${results.reduce((a, r) => a + r.kills, 0)}, ` +
+    `deaths ${deaths}, ` +
+    `base survived ${avgSurvived.toFixed(0)}s on average, ` +
+    `leash ${(results.reduce((a, r) => a + r.leashPct, 0) / results.length).toFixed(1)}%`,
+);
+
+// Гейт: защита базы — это цель бота, стрельба в бетон — известная регрессия.
+const failures: string[] = [];
+if (steel > Math.max(2, totalShots * 0.05)) {
+  failures.push(`too many shots into steel: ${steel}/${totalShots}`);
+}
+// Пороги — регрессионные, с запасом ниже замеров текущего бота
+// (77 с и 0 смертей) и заметно выше предыдущего (55 с, 4 смерти).
+// Порог нормируем длиной прогона: baseSurvivedSec сверху ограничен ей,
+// иначе короткий прогон падал бы всегда (`test:bot 30` — никогда не OK).
+const survivalTarget = Math.min(60, SECONDS * 0.9);
+if (avgSurvived < survivalTarget) {
+  failures.push(
+    `base fell too early: ${avgSurvived.toFixed(0)}s on average, ` +
+      `expected ${survivalTarget.toFixed(0)}s`,
   );
-  process.exit(kinds.steel > Math.max(2, shots * 0.05) ? 1 : 0);
-}, SECONDS * 1000);
+}
+if (deaths > 2) failures.push(`bot died too often: ${deaths}`);
+if (failures.length) {
+  console.error(`FAIL: ${failures.join("; ")}`);
+  process.exit(1);
+}
+console.log("OK");
