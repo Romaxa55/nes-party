@@ -13,6 +13,7 @@ import {
 import { ms } from "./bench";
 import { setupChatPanel } from "./chat-ui";
 import { VoiceHub } from "./voice";
+import { startBot, type Bot } from "./bot";
 import { renderSVG } from "uqr";
 
 const screenPick = $("screen-pick");
@@ -53,6 +54,26 @@ micBtn.addEventListener("click", async () => {
   } finally {
     micBtn.disabled = false;
   }
+});
+
+// Бот занимает P2, пока слот свободен; живой игрок всегда важнее.
+let bot: Bot | null = null;
+let botWanted = false;
+let p2Taken = false;
+const botBtn = $<HTMLButtonElement>("bot-btn");
+function syncBot(): void {
+  if (!bot) return;
+  if (botWanted && !p2Taken) bot.resume();
+  else bot.pause();
+  botBtn.textContent = botWanted
+    ? p2Taken
+      ? "Bot: waiting" // живой игрок на P2 — бот уступил
+      : "Bot: on"
+    : "Bot: off";
+}
+botBtn.addEventListener("click", () => {
+  botWanted = !botWanted;
+  syncBot();
 });
 
 setupRomPicker({
@@ -173,9 +194,21 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   session.onVoiceCall = (call) => hub.accept(call);
   micBtn.disabled = false; // хаб готов — кнопка оживает
 
-  session.onInput = (slot, mask) => engine?.setButtons(slot, mask);
+  // Бот стартует на паузе и включается кнопкой.
+  bot = startBot(engine.nes, (mask) => engine?.setButtons(2, mask));
+  bot.pause();
+  botBtn.disabled = false;
+  syncBot();
+
+  session.onInput = (slot, mask) => {
+    // Живой ввод на P2 перебивает бота (он и так на паузе, но на всякий).
+    if (slot === 2 && bot && !bot.paused) return;
+    engine?.setButtons(slot, mask);
+  };
   session.onPeersChange = (list) => {
     lastPeers = list;
+    p2Taken = list.some((p) => p.slot === 2);
+    syncBot();
     renderPeers(list);
   };
   session.onError = (err) => {
