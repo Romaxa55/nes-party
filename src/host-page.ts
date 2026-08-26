@@ -67,10 +67,16 @@ setupRomPicker({
 });
 
 // Ручные Game Genie коды из ссылки: host.html?gg=SLAIUZ,GXXZZLVI
-const queryGg = (new URLSearchParams(location.search).get("gg") ?? "")
+const query = new URLSearchParams(location.search);
+const queryGg = (query.get("gg") ?? "")
   .split(",")
   .map((c) => c.trim())
   .filter(Boolean);
+// Постоянный облачный сервер: ?room=TANKS — фиксированный код комнаты,
+// ?tv=1 — хост не играет, оба контроллера уходят клиентам.
+const preferredRoom = query.get("room") ?? undefined;
+const tvMode = query.get("tv") === "1";
+if (tvMode) hostPlays = false;
 
 async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   if (started) return;
@@ -133,6 +139,7 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   // регистрируется — применится, как только сессия появится.
   let sessionRef: HostSession | null = null;
   const hostPlaysBox = $<HTMLInputElement>("host-plays");
+  hostPlaysBox.checked = hostPlays; // tv-режим снимает галку ещё до комнаты
   hostPlaysBox.addEventListener("change", () => {
     hostPlays = hostPlaysBox.checked;
     if (!hostPlays) engine?.setButtons(1, 0); // отпустить свои кнопки
@@ -145,7 +152,7 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
   netStatus.textContent = "Creating room…";
   let session: HostSession;
   try {
-    session = await HostSession.create();
+    session = await HostSession.create(preferredRoom);
   } catch (err) {
     netStatus.textContent =
       `Could not create a room (${(err as Error).message}). ` +
