@@ -19,6 +19,10 @@ import { MASKS, type ButtonMask } from "./controls";
 
 const X0 = 0x90;
 const Y0 = 0x98;
+// Пули — те же слоты, что танки (0=P1, 1=P2, 2-7 враги); реверс подтверждён:
+// выстрел P2 оживил $B9/$C3, вражеские снаряды летают в слотах 2-7.
+const BX0 = 0xb8;
+const BY0 = 0xc2;
 const EMPTY = 0xff;
 
 // Зона орла: центр нижнего ряда поля (эмпирически по стартовым позициям:
@@ -77,6 +81,29 @@ export function startBot(
     const y = mem[Y0 + slot];
     if (x === EMPTY || y === EMPTY) return null;
     return { x, y };
+  };
+
+  // Вражеские пули с вектором движения: направление выводится трекингом
+  // между тиками (за 66 мс снаряд проходит ~8px — надёжно различимо).
+  interface Bullet extends Tank {
+    dx: number;
+    dy: number;
+  }
+  const prevBullets: Array<Tank | null> = Array(8).fill(null);
+  const readBullets = (): Bullet[] => {
+    const out: Bullet[] = [];
+    for (let s = 2; s < 8; s++) {
+      const x = mem[BX0 + s];
+      const y = mem[BY0 + s];
+      if (x === EMPTY || y === EMPTY) {
+        prevBullets[s] = null;
+        continue;
+      }
+      const prev = prevBullets[s];
+      if (prev) out.push({ x, y, dx: x - prev.x, dy: y - prev.y });
+      prevBullets[s] = { x, y };
+    }
+    return out;
   };
 
   const inBaseLine = (from: Tank, d: Dir): boolean => {
@@ -138,6 +165,53 @@ export function startBot(
     }
     lastX = me.x;
     lastY = me.y;
+
+    if (fireCooldown > 0) fireCooldown--;
+
+    // Угроза важнее атаки: пуля, летящая к нам по оси с малым поперечным
+    // отклонением и в пределах опасной дистанции.
+    let threat: Bullet | null = null;
+    for (const b of readBullets()) {
+      const closingX = (b.dx > 0 && b.x < me.x) || (b.dx < 0 && b.x > me.x);
+      const closingY = (b.dy > 0 && b.y < me.y) || (b.dy < 0 && b.y > me.y);
+      if (b.dx !== 0 && closingX && Math.abs(b.y - me.y) <= 10 &&
+          Math.abs(b.x - me.x) <= 0x48) {
+        threat = b;
+        break;
+      }
+      if (b.dy !== 0 && closingY && Math.abs(b.x - me.x) <= 10 &&
+          Math.abs(b.y - me.y) <= 0x48) {
+        threat = b;
+        break;
+      }
+    }
+    if (threat) {
+      // Перехват: если ствол уже смотрит навстречу — стреляем (снаряды в
+      // Battle City взаимно уничтожаются), продолжая уходить с линии.
+      const head: Dir =
+        threat.dx !== 0
+          ? threat.dx > 0
+            ? "LEFT"
+            : "RIGHT"
+          : threat.dy > 0
+            ? "UP"
+            : "DOWN";
+      const intercept =
+        dir === head && safeFire(me, ally, dir) && fireCooldown <= 0;
+      // Уклонение: перпендикулярно оси полёта, расширяя разрыв с линией.
+      dir =
+        threat.dx !== 0
+          ? me.y <= threat.y
+            ? "UP"
+            : "DOWN"
+          : me.x <= threat.x
+            ? "LEFT"
+            : "RIGHT";
+      dirLock = 2;
+      if (intercept) fireCooldown = 4;
+      setButtons((DIR_MASK[dir] | (intercept ? MASKS.A : 0)) & 0xff);
+      return;
+    }
 
     let fire = false;
 
@@ -211,7 +285,6 @@ export function startBot(
     }
 
     if (fire) fireCooldown = 4; // не заливать очередью
-    else if (fireCooldown > 0) fireCooldown--;
 
     setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
   };
