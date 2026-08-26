@@ -36,6 +36,11 @@ export function startEngine(opts: {
   audio?: AudioPipe | null;
   /** Game Genie коды (например, бесконечные жизни) — применяются к рому. */
   ggCodes?: string[];
+  /**
+   * RAM-фризы: значения, прописываемые в память каждый кадр (классический
+   * «замороженный» чит). Надёжнее Game Genie: не зависит от версии дампа.
+   */
+  ramPatches?: Array<{ a: number; v: number }>;
   onStats?: (s: EngineStats) => void;
   /** Эмулятор упал во время игры; цикл уже остановлен. */
   onError?: (err: Error) => void;
@@ -111,6 +116,11 @@ export function startEngine(opts: {
           applyButtons(nes, player, applied[i], desired[i]);
           applied[i] = desired[i];
         }
+      }
+
+      if (opts.ramPatches?.length) {
+        const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
+        for (const p of opts.ramPatches) mem[p.a & 0x7ff] = p.v & 0xff;
       }
 
       const t0 = performance.now();

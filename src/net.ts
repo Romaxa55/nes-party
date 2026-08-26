@@ -102,7 +102,22 @@ export function normalizeCode(raw: string): string {
 }
 
 function peerOptions(): NonNullable<ConstructorParameters<typeof Peer>[1]> {
-  const iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+  const iceServers: RTCIceServer[] = [
+    { urls: "stun:stun.l.google.com:19302" },
+    // Публичный TURN (openrelay) — запасные кандидаты для случаев, где
+    // прямой P2P не пробивается (датацентровые NAT: headless-хост комнаты
+    // TANKS ↔ внешние клиенты). Прямому соединению не мешает: ICE всегда
+    // предпочитает host/srflx-пары relay-паре.
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
+  ];
   try {
     const extra = JSON.parse(localStorage.getItem("nes-party.ice") ?? "[]");
     if (Array.isArray(extra)) {
