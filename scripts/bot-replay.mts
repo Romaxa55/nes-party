@@ -85,6 +85,19 @@ function rect(rgb: Uint8Array, cx: number, cy: number, r: number, c: [number, nu
   }
 }
 
+/** Длина полёта пули из точки в направлении: до кирпича/бетона/края поля. */
+function shotLength(mem: number[], x: number, y: number, dir: number): number {
+  const [dx, dy] = DIRS[dir];
+  for (let t = 10; t < 0xd8; t += 2) {
+    const cx = x + dx * t;
+    const cy = y + dy * t;
+    if (cx < 16 || cx > 223 || cy < 16 || cy > 223) return t;
+    const tile = mem[0x400 + (cy >> 3) * 32 + (cx >> 3)];
+    if ((tile >= 1 && tile <= 0x11) || tile >= 0xc8) return t;
+  }
+  return 0xd8;
+}
+
 function ray(
   rgb: Uint8Array,
   x: number,
@@ -92,9 +105,10 @@ function ray(
   dir: number,
   len: number,
   c: [number, number, number],
+  step = 3,
 ): void {
   const [dx, dy] = DIRS[dir];
-  for (let t = 10; t < len; t += 3) {
+  for (let t = 10; t < len; t += step) {
     putPx(rgb, x + dx * t, y + dy * t, c);
   }
 }
@@ -185,20 +199,22 @@ async function record(style: Scenario): Promise<void> {
     const by = mem[0x99];
     if (bx !== 0xff && by !== 0xff) {
       rect(rgb, bx, by, 10, colorOf(bot.mode));
-      ray(rgb, bx, by, mem[0xa1] & 3, 0x50, [255, 255, 255]);
+      // Ствол бота — до места, куда реально долетит пуля.
+      const bd = mem[0xa1] & 3;
+      ray(rgb, bx, by, bd, shotLength(mem, bx, by, bd), [255, 255, 255], 2);
     }
     for (let s = 2; s < 8; s++) {
       const ex = mem[0x90 + s];
       const ey = mem[0x98 + s];
       if (ex === 0xff || ey === 0xff) continue;
       const d = mem[0xa0 + s] & 3;
-      // Рисуем только стволы, смотрящие в коридор бота, — остальное шум.
+      const len = shotLength(mem, ex, ey, d);
+      // Луч, ведущий в коридор бота, — плотный; остальные — редкие точки.
       const [ddx, ddy] = DIRS[d];
       const along = ddx !== 0 ? (bx - ex) * ddx : (by - ey) * ddy;
       const across = ddx !== 0 ? Math.abs(by - ey) : Math.abs(bx - ex);
-      if (along > 0 && along <= 0x60 && across <= 14) {
-        ray(rgb, ex, ey, d, Math.min(along, 0x60), [255, 70, 70]);
-      }
+      const atBot = along > 0 && along <= len && across <= 14;
+      ray(rgb, ex, ey, d, len, [255, 70, 70], atBot ? 2 : 6);
     }
 
     await write(rgb);
