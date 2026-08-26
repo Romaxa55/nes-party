@@ -192,13 +192,18 @@ export class HostSession {
   }
 
   /**
-   * Создаёт комнату: генерирует код и занимает peer id с этим кодом.
-   * Коллизия кода (unavailable-id) — пробуем следующий, до пяти раз.
+   * Создаёт комнату: занимает peer id с кодом. Без preferredCode код
+   * случайный; с ним (постоянный облачный сервер) сначала пробуем его,
+   * при коллизии откатываемся на случайные.
    */
-  static async create(): Promise<HostSession> {
+  static async create(preferredCode?: string): Promise<HostSession> {
     let lastError: Error = new Error("failed to create a room");
     for (let attempt = 0; attempt < 5; attempt++) {
-      const code = randomCode();
+      const code =
+        attempt === 0 && preferredCode
+          ? normalizeCode(preferredCode)
+          : randomCode();
+      if (code.length !== CODE_LENGTH) continue;
       try {
         const peer = await openPeer(ID_PREFIX + code);
         return new HostSession(code, peer);
