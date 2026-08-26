@@ -123,12 +123,18 @@ for (let f = 0; f < total; f++) {
           console.log(
             `SPR  f=${f} (${(f / 60).toFixed(0)}s) спрайт#${i} tile=0x${tile
               .toString(16)
-              .padStart(2, "0")} статичен на (${sx},${sy})`,
+              .padStart(2, "0")} статичен на (${sx},${sy}); ` +
+              `RAM-кандидаты x=${[...Array(0x1f0).keys()]
+                .filter((a) => Math.abs(mem[a] - sx) <= 4 && stableFor[a] > 100)
+                .map((a) => "$" + a.toString(16))
+                .join(",")} y=${[...Array(0x1f0).keys()]
+                .filter((a) => Math.abs(mem[a] - sy) <= 12 && stableFor[a] > 100)
+                .map((a) => "$" + a.toString(16))
+                .join(",")}`,
           );
         }
       } else {
-        sprStable.clear(); // интересует только текущая стабильность
-        sprStable.set(key, { frames: 0, tile });
+        sprStable.set(key, { frames: 0, tile }); // clear() тут стирал всё
       }
     }
   }

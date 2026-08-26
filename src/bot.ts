@@ -244,6 +244,8 @@ export function startBot(
     { length: 8 },
     () => [],
   );
+  /** Тики с момента спавна врага: пока он «свежий», он стоит на месте. */
+  const freshSpawn = new Int16Array(8);
   const trackEnemies = (list: Enemy[]): void => {
     const seen = new Set<number>();
     for (const e of list) {
@@ -280,6 +282,11 @@ export function startBot(
         } else {
           enemyVel[e.slot] = { vx: 0, vy: 0, steady: false };
           velHistory[e.slot].length = 0;
+          // Телепорт на верхнюю точку спавна: враг только что появился и
+          // ~секунду стоит неподвижно — идеальная цель для расстрела.
+          if (e.y === 24 && (e.x === 24 || e.x === 120 || e.x === 216)) {
+            freshSpawn[e.slot] = 75; // ~2.5 c окна
+          }
         }
       }
       prevEnemyPos[e.slot] = { x: e.x, y: e.y };
@@ -619,6 +626,7 @@ export function startBot(
     if (dirLock > 0) dirLock--;
     if (targetTicks > 0) targetTicks--;
     if (revengeTicks > 0) revengeTicks--;
+    for (let i = 2; i < 8; i++) if (freshSpawn[i] > 0) freshSpawn[i]--;
 
     // --- Угроза важнее атаки: летящая в нас пуля --------------------------
     // Дружеская (P1) лишь морозит: реагируем только в упор, иначе бот
@@ -855,12 +863,19 @@ export function startBot(
         const block = firstObstacle(me, d, dist);
         if (block?.kind === "steel") continue; // пуля погибнет впустую
         const clear = block === null; // до врага ничего не мешает
+        // Свежезаспавненный враг стоит неподвижно: чистая линия до него —
+        // гарантированный килл, дальность не важна (расстрел спавна).
+        const spawnKill = freshSpawn[e.slot] > 0 && clear;
         // На экране живёт одна наша пуля: выстрел через всё поле запирает
         // пушку почти на две секунды. Дальний огонь — только наверняка
         // (чистая линия) и когда никто не подобрался вплотную.
         // При обороне дальний огонь запрещён совсем: пуля улетит на
         // две секунды, а прорыв к орлу нужно встречать заряженным.
-        if (dist > LONG_SHOT_DIST && (!clear || closeEnemy || defending)) {
+        if (
+          !spawnKill &&
+          dist > LONG_SHOT_DIST &&
+          (!clear || closeEnemy || defending)
+        ) {
           continue;
         }
         if (!better(dist, clear)) continue;
