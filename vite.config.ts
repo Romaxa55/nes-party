@@ -1,8 +1,20 @@
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
+// Версия сборки видна в HUD — «какая версия бота?» решается взглядом.
+let buildId = "dev";
+try {
+  buildId = execSync("git rev-parse --short HEAD").toString().trim();
+} catch {
+  /* вне git */
+}
+
 export default defineConfig({
+  define: {
+    __BUILD_ID__: JSON.stringify(buildId),
+  },
   // Относительный base — одинаково работает и локально, и на GitHub Pages
   // под любым именем репозитория, без правки конфига.
   base: "./",

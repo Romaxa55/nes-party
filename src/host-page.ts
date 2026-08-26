@@ -25,6 +25,11 @@ const copyLink = $<HTMLButtonElement>("copy-link");
 const players = $("players");
 const hostStats = $("host-stats");
 
+declare const __BUILD_ID__: string;
+// Версия сборки в HUD: сразу видно, не подсунул ли кеш старый код.
+hostStats.title = `build ${__BUILD_ID__}`;
+hostStats.textContent = `v:${__BUILD_ID__}`;
+
 let engine: Engine | null = null;
 let started = false;
 // Играет ли хост сам за P1. Выключается чекбоксом — режим «этот экран
