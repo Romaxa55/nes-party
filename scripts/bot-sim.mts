@@ -7,12 +7,25 @@
  * Запуск: node --import tsx scripts/bot-sim.mts [секунд]
  */
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { NES } from "jsnes";
 import { startBot } from "../src/bot";
 import { MASKS, type ButtonMask } from "../src/controls";
 
-const ROM = new Uint8Array(fs.readFileSync("public/roms/bc.nes"));
+// ROM'ы не в git — на клоне без них тест честно скипается.
+const ROM_PATH = fileURLToPath(
+  new URL("../public/roms/bc.nes", import.meta.url),
+);
+if (!fs.existsSync(ROM_PATH)) {
+  console.log(`skip: ${ROM_PATH} not found (ROMs are not committed)`);
+  process.exit(0);
+}
+const ROM = new Uint8Array(fs.readFileSync(ROM_PATH));
 const SECONDS = Number(process.argv[2] ?? 90);
+if (!Number.isFinite(SECONDS) || SECONDS <= 0) {
+  console.error(`bad duration: ${process.argv[2] ?? "(none)"}`);
+  process.exit(2);
+}
 const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
 
 const nes = new NES({ emulateSound: false, onFrame: () => {} });
@@ -52,16 +65,33 @@ const setButtons = (mask: ButtonMask): void => {
 
 const bot = startBot(nes, setButtons);
 
+// P1 не совсем AFK: периодически стреляет и крутится — без этого фикс
+// «бот уклоняется от пуль игрока» (слот пуль 0) не исполняется ни разу.
+const P1_DIRS = [BTN.UP, BTN.RIGHT, BTN.DOWN, BTN.LEFT];
+let p1Phase = 0;
+const p1Timer = setInterval(() => {
+  const d = P1_DIRS[p1Phase % 4];
+  p1Phase++;
+  nes.buttonDown(1, d as 0);
+  setTimeout(() => {
+    nes.buttonUp(1, d as 0);
+    nes.buttonDown(1, BTN.A as 0);
+    setTimeout(() => nes.buttonUp(1, BTN.A as 0), 100);
+  }, 150);
+}, 1800);
+
 // --- Метрики ---------------------------------------------------------------
 let shots = 0;
 const kinds = { steel: 0, brick: 0, foe: 0, void: 0 };
 let kills = 0;
 let botDeaths = 0;
+let eagleEverBroken = false;
 let prevBotBullet: { x: number; y: number } | null = null;
 const prevEnemy: Array<{ x: number; y: number } | null> = Array(8).fill(null);
 let prevBotAlive = false;
 
-/** Классификация траектории: во что пуля упрётся первым делом. */
+/** Классификация траектории: во что пуля упрётся первым делом.
+ *  Ширина пули учитывается (±2 поперёк), скан от самой точки рождения. */
 const classifyPath = (
   from: { x: number; y: number },
   dx: number,
@@ -75,15 +105,23 @@ const classifyPath = (
     const y = mem[0x98 + s];
     if (x !== 0xff && y !== 0xff) foes.push({ x, y });
   }
-  let cx = from.x + sx;
-  let cy = from.y + sy;
-  for (let t = 8; t < 0xd0; t += 8) {
+  let cx = from.x;
+  let cy = from.y;
+  for (let t = 0; t < 0xd0; t += 8) {
     if (cx < 16 || cx > 223 || cy < 16 || cy > 223) return "void";
     if (foes.some((f) => Math.abs(f.x - cx) <= 10 && Math.abs(f.y - cy) <= 10))
       return "foe";
-    const tile = mem[0x400 + (cy >> 3) * 32 + (cx >> 3)];
-    if (tile === 0x10 || tile === 0x11) return "steel";
-    if (tile >= 1 && tile <= 0x0f) return "brick";
+    const a =
+      sx !== 0
+        ? mem[0x400 + ((cy - 2) >> 3) * 32 + (cx >> 3)]
+        : mem[0x400 + (cy >> 3) * 32 + ((cx - 2) >> 3)];
+    const b =
+      sx !== 0
+        ? mem[0x400 + ((cy + 2) >> 3) * 32 + (cx >> 3)]
+        : mem[0x400 + (cy >> 3) * 32 + ((cx + 2) >> 3)];
+    if ((a >= 1 && a <= 0x0f) || (b >= 1 && b <= 0x0f)) return "brick";
+    if (a === 0x10 || b === 0x10) return "steel";
+    if (a === 0x11 || b === 0x11) return "void"; // рамка
     cx += sx;
     cy += sy;
   }
@@ -93,6 +131,7 @@ let pendingShot: {
   x: number;
   y: number;
   foes: Array<{ x: number; y: number }>;
+  track: Array<{ x: number; y: number }>;
 } | null = null;
 let intercepts = 0;
 let farShots = 0;
@@ -148,15 +187,22 @@ const sample = (): void => {
         pendingShot = null;
       } else {
         shots++;
-        // направление узнаем по дельте на следующем кадре
-        pendingShot = { x: bx, y: by, foes: foeBullets() };
+        // направление узнаем по стабильной дельте (2-я -> 4-я позиция):
+        // первая дельта может склеить конец старой пули с началом новой
+        pendingShot = { x: bx, y: by, foes: foeBullets(), track: [] };
       }
     } else if (pendingShot) {
-      const dx = bx - pendingShot.x;
-      const dy = by - pendingShot.y;
-      if (dx !== 0 || dy !== 0) {
-        if (onRay(pendingShot, dx, dy, pendingShot.foes)) intercepts++;
-        else kinds[classifyPath(pendingShot, dx, dy)]++;
+      pendingShot.track.push({ x: bx, y: by });
+      if (pendingShot.track.length >= 4) {
+        const p2 = pendingShot.track[1];
+        const p4 = pendingShot.track[3];
+        const dx = p4.x - p2.x;
+        const dy = p4.y - p2.y;
+        // диагональ или стоячая «пуля» — мусорный сэмпл, не классифицируем
+        if ((dx !== 0) !== (dy !== 0)) {
+          if (onRay(pendingShot, dx, dy, pendingShot.foes)) intercepts++;
+          else kinds[classifyPath(pendingShot, dx, dy)]++;
+        }
         pendingShot = null;
       }
     }
@@ -183,6 +229,11 @@ const sample = (): void => {
   const botAlive = mem[0x91] !== 0xff && mem[0x99] !== 0xff;
   if (!botAlive && prevBotAlive) botDeaths++;
   prevBotAlive = botAlive;
+
+  // Орёл: «был цел всё время» — мгновенный сэмпл в конце ловил экраны
+  // счёта/смены стадии, где тайлмап другой. Меряем только в бою (бот жив
+  // или только что был жив — на межэкранах слоты танков пусты).
+  if (botAlive && mem[0x400 + 26 * 32 + 14] !== 0xc8) eagleEverBroken = true;
 };
 
 const gameTimer = setInterval(() => {
@@ -192,8 +243,9 @@ const gameTimer = setInterval(() => {
 
 setTimeout(() => {
   clearInterval(gameTimer);
+  clearInterval(p1Timer);
   bot.stop();
-  const eagleOk = mem[0x400 + 26 * 32 + 14] === 0xc8;
+  const eagleOk = !eagleEverBroken;
   console.log(
     JSON.stringify(
       {

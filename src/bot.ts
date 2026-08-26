@@ -121,7 +121,15 @@ export function startBot(
         continue;
       }
       const prev = prevBullets[s];
-      if (prev) out.push({ x, y, dx: x - prev.x, dy: y - prev.y });
+      if (prev) {
+        const dx = x - prev.x;
+        const dy = y - prev.y;
+        // Слот переиспользуется без промежуточного FF: склейка конца старой
+        // пули с началом новой даёт мусорный вектор — отбрасываем сэмпл.
+        if (Math.abs(dx) <= 24 && Math.abs(dy) <= 24) {
+          out.push({ x, y, dx, dy });
+        }
+      }
       prevBullets[s] = { x, y };
     }
     return out;
@@ -130,8 +138,11 @@ export function startBot(
   /**
    * Первая преграда на линии выстрела: сталь — пуля погибнет без пользы;
    * кирпич (включая прогрызенные четвертинки $01-$0E) — выстрел полезен;
-   * рамка поля — пусто до края. Пуля шире точки, поэтому на стыке тайлов
-   * смотрим обе стороны линии.
+   * рамка поля ($11 и выход за границы) — пусто до края. Неизвестные
+   * значения тайлов считаются пустотой: на экзотических стадиях бот
+   * безопасно откатывается к старому поведению. Пуля шире точки, поэтому
+   * на стыке тайлов смотрим обе стороны линии; кирпич приоритетнее стали —
+   * пуля выгрызает свою половину стыка.
    */
   const firstObstacle = (
     from: Tank,
@@ -147,16 +158,22 @@ export function startBot(
       if (x < 16 || x > 223 || y < 16 || y > 223) {
         return { kind: "border", dist: travelled };
       }
-      const side = sx !== 0 ? [y - 2, y + 2] : [x - 2, x + 2];
-      for (const s of side) {
-        const t =
-          sx !== 0
-            ? mem[TILE_BASE + (s >> 3) * 32 + (x >> 3)]
-            : mem[TILE_BASE + (y >> 3) * 32 + (s >> 3)];
-        if (t === T_STEEL || t === T_BORDER) {
-          return { kind: "steel", dist: travelled };
-        }
-        if (t >= 1 && t <= T_BRICK) return { kind: "brick", dist: travelled };
+      const a =
+        sx !== 0
+          ? mem[TILE_BASE + ((y - 2) >> 3) * 32 + (x >> 3)]
+          : mem[TILE_BASE + (y >> 3) * 32 + ((x - 2) >> 3)];
+      const b =
+        sx !== 0
+          ? mem[TILE_BASE + ((y + 2) >> 3) * 32 + (x >> 3)]
+          : mem[TILE_BASE + (y >> 3) * 32 + ((x + 2) >> 3)];
+      const brick =
+        (a >= 1 && a <= T_BRICK) || (b >= 1 && b <= T_BRICK);
+      if (brick) return { kind: "brick", dist: travelled };
+      if (a === T_STEEL || b === T_STEEL) {
+        return { kind: "steel", dist: travelled };
+      }
+      if (a === T_BORDER || b === T_BORDER) {
+        return { kind: "border", dist: travelled };
       }
       x += sx;
       y += sy;
@@ -465,10 +482,28 @@ export function startBot(
       // выравнивание — редкость в лабиринте, ждать его = не стрелять вовсе.
       // Кроме случая, когда первым на линии стоит бетон: там пуля гибнет
       // впустую (полевой отчёт «стреляет в бетон»).
+      // Скан режем по ближайшему врагу на линии ствола: враг ближе стали —
+      // цель поражаема, стена за его спиной не повод молчать.
+      let scanDist = 0xd0;
+      for (const e of enemies) {
+        if (dir === "UP" || dir === "DOWN") {
+          if (
+            Math.abs(e.x - me.x) <= SNAP_TOLERANCE &&
+            (dir === "UP" ? e.y < me.y : e.y > me.y)
+          ) {
+            scanDist = Math.min(scanDist, Math.abs(e.y - me.y));
+          }
+        } else if (
+          Math.abs(e.y - me.y) <= SNAP_TOLERANCE &&
+          (dir === "LEFT" ? e.x < me.x : e.x > me.x)
+        ) {
+          scanDist = Math.min(scanDist, Math.abs(e.x - me.x));
+        }
+      }
       if (
         safeFire(me, ally, dir) &&
         fireCooldown <= 0 &&
-        !wastedShot(me, dir, 0xd0)
+        !wastedShot(me, dir, scanDist)
       ) {
         fire = true;
       }
