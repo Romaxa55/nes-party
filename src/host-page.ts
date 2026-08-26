@@ -283,14 +283,39 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
 const romUrl = new URLSearchParams(location.search).get("rom");
 if (romUrl) void beginFromUrl(romUrl);
 
+/** Читы конкретного файла из манифеста — чтобы ?rom= получал их так же,
+ *  как галерея (бесконечные жизни не должны зависеть от способа запуска). */
+async function ggFromManifest(pathname: string): Promise<string[] | undefined> {
+  try {
+    const res = await fetch("/roms/index.json", { credentials: "omit" });
+    if (!res.ok) return undefined;
+    const parsed = (await res.json()) as {
+      roms?: Array<{ file?: unknown; gg?: unknown }>;
+    };
+    const file = pathname.split("/").pop();
+    const hit = (parsed.roms ?? []).find(
+      (r) => typeof r?.file === "string" && r.file === file,
+    );
+    return Array.isArray(hit?.gg)
+      ? hit.gg.filter((c): c is string => typeof c === "string")
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
   const pickStatus = $("pick-status");
   pickStatus.textContent = "Loading ROM from the link…";
   pickStatus.hidden = false;
 
   let bytes: Uint8Array;
+  let manifestGg: string[] | undefined;
   try {
     const url = new URL(raw, location.href);
+    if (!ggCodes?.length && !queryGg.length) {
+      manifestGg = await ggFromManifest(url.pathname);
+    }
     // Отсекает data:, blob: и чужие http: — источники, которых в честной
     // ссылке быть не может.
     if (url.protocol !== "https:" && url.origin !== location.origin) {
@@ -327,7 +352,7 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
     return;
   }
   pickStatus.hidden = true;
-  void begin(bytes, ggCodes);
+  void begin(bytes, ggCodes?.length ? ggCodes : manifestGg);
 }
 
 /**
