@@ -35,6 +35,9 @@ const TICK_MS = 33; // 30 решений в секунду
 const AIM_TOLERANCE = 6;
 /** Прицел оппортуниста: враг «на линии» для мгновенного доворота. */
 const SNAP_TOLERANCE = 10;
+/** В упор допуск шире: пуля широкая, а «проезжающий вплотную» не прощается. */
+const SNAP_TOLERANCE_NEAR = 13;
+const SNAP_NEAR_DIST = 0x40;
 /** Дальность снайперского рефлекса. */
 const SNAP_RANGE = 0x78;
 const ALLY_RADIUS = 12;
@@ -44,8 +47,15 @@ const SELF_DEFENSE_DIST = 0x30;
 const ANCHOR = { x: 0x98, y: 0xb0 };
 /** «Поводок»: дальше этого от базы в погоню не уходим. */
 const LEASH_DIST = 0x70;
-/** Враг ниже этой линии — прорыв к базе, бросаем всё. */
+/** Возврат с гистерезисом: домой до этой глубины, иначе пинг-понг на границе. */
+const LEASH_RESET = 0x40;
+/** Цели дальше этого от орла не выбираются вовсе — защитник, не охотник. */
+const ENGAGE_RADIUS = 0x70;
+/** Прорыв: враг в нижней зоне И близко к орлу (Manhattan). Раньше вся
+ *  нижняя половина поля считалась прорывом — враги там есть почти всегда,
+ *  поводок не включался, и бот вечно гонялся по всей карте. */
 const BREACH_Y = 0x88;
+const BREACH_RADIUS = 0x60;
 
 interface Tank {
   x: number;
@@ -59,6 +69,8 @@ interface Enemy extends Tank {
 interface Bullet extends Tank {
   dx: number;
   dy: number;
+  /** Пуля игрока-союзника: морозит, но не убивает — паника не нужна. */
+  friendly: boolean;
 }
 
 type Dir = "UP" | "DOWN" | "LEFT" | "RIGHT";
@@ -98,6 +110,8 @@ export function startBot(
   /** Лок цели: не перескакивать между врагами каждый тик. */
   let targetSlot = -1;
   let targetTicks = 0;
+  /** Возврат на пост: включается за поводком, отпускает только у орла. */
+  let returning = false;
 
   const read = (slot: number): Tank | null => {
     const x = mem[X0 + slot];
@@ -127,7 +141,7 @@ export function startBot(
         // Слот переиспользуется без промежуточного FF: склейка конца старой
         // пули с началом новой даёт мусорный вектор — отбрасываем сэмпл.
         if (Math.abs(dx) <= 24 && Math.abs(dy) <= 24) {
-          out.push({ x, y, dx, dy });
+          out.push({ x, y, dx, dy, friendly: s === 0 });
         }
       }
       prevBullets[s] = { x, y };
@@ -257,20 +271,23 @@ export function startBot(
     if (targetTicks > 0) targetTicks--;
 
     // --- Угроза важнее атаки: летящая в нас пуля --------------------------
+    // Дружеская (P1) лишь морозит: реагируем только в упор, иначе бот
+    // вечно уклоняется от союзника вместо боя («мимо проезжают — не видит»).
     let threat: Bullet | null = null;
     for (const b of readBullets()) {
+      const range = b.friendly ? 0x28 : 0x58;
       const closingX = (b.dx > 0 && b.x < me.x) || (b.dx < 0 && b.x > me.x);
       const closingY = (b.dy > 0 && b.y < me.y) || (b.dy < 0 && b.y > me.y);
       if (
         b.dx !== 0 && closingX &&
-        Math.abs(b.y - me.y) <= 12 && Math.abs(b.x - me.x) <= 0x58
+        Math.abs(b.y - me.y) <= 12 && Math.abs(b.x - me.x) <= range
       ) {
         threat = b;
         break;
       }
       if (
         b.dy !== 0 && closingY &&
-        Math.abs(b.x - me.x) <= 12 && Math.abs(b.y - me.y) <= 0x58
+        Math.abs(b.x - me.x) <= 12 && Math.abs(b.y - me.y) <= range
       ) {
         threat = b;
         break;
@@ -319,30 +336,61 @@ export function startBot(
 
     let fire = false;
 
+    // Далеко от орла и прорыва нет — приоритет «домой». Считается ДО
+    // снайперского рефлекса: раньше рефлекс перехватывал каждый тик
+    // (наверху всегда кто-то на линии), бот застревал в карусели
+    // довортов у чужого спавна, а базу сносили (полевой отчёт).
+    const myLeash =
+      Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
+    const isBreach = (e: Enemy): boolean =>
+      e.y >= BREACH_Y &&
+      Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
+        BREACH_RADIUS;
+    const breachNow = enemies.some(isBreach);
+    if (myLeash > LEASH_DIST) returning = true;
+    else if (myLeash <= LEASH_RESET) returning = false;
+    const homeSick = !breachNow && returning;
+    const towardsBase = (d: Dir): boolean =>
+      d === "DOWN"
+        ? me.y < BASE_CENTER.y
+        : d === "UP"
+          ? me.y > BASE_CENTER.y
+          : d === "LEFT"
+            ? me.x > BASE_CENTER.x
+            : me.x < BASE_CENTER.x;
+
     // --- Снайперский рефлекс: любой враг на нашей линии — мгновенный
     // доворот и выстрел, поверх текущих планов. Это «мочить проезжающих»:
     // навигация к далёкой цели не должна прощать подставившегося рядом.
+    // За поводком рефлекс урезан: только в упор или попутно дороге домой.
     if (enemies.length > 0) {
       let snap: { d: Dir; dist: number } | null = null;
       for (const e of enemies) {
         const ddx = e.x - me.x;
         const ddy = e.y - me.y;
-        if (Math.abs(ddx) <= SNAP_TOLERANCE && Math.abs(ddy) <= SNAP_RANGE) {
+        const tolV =
+          Math.abs(ddy) <= SNAP_NEAR_DIST ? SNAP_TOLERANCE_NEAR : SNAP_TOLERANCE;
+        const tolH =
+          Math.abs(ddx) <= SNAP_NEAR_DIST ? SNAP_TOLERANCE_NEAR : SNAP_TOLERANCE;
+        if (Math.abs(ddx) <= tolV && Math.abs(ddy) <= SNAP_RANGE) {
           const d: Dir = ddy < 0 ? "UP" : "DOWN";
           if (
             (!snap || Math.abs(ddy) < snap.dist) &&
+            (!homeSick ||
+              Math.abs(ddy) <= SELF_DEFENSE_DIST ||
+              towardsBase(d)) &&
             safeFire(me, ally, d) &&
             firstObstacle(me, d, Math.abs(ddy))?.kind !== "steel"
           ) {
             snap = { d, dist: Math.abs(ddy) };
           }
-        } else if (
-          Math.abs(ddy) <= SNAP_TOLERANCE &&
-          Math.abs(ddx) <= SNAP_RANGE
-        ) {
+        } else if (Math.abs(ddy) <= tolH && Math.abs(ddx) <= SNAP_RANGE) {
           const d: Dir = ddx < 0 ? "LEFT" : "RIGHT";
           if (
             (!snap || Math.abs(ddx) < snap.dist) &&
+            (!homeSick ||
+              Math.abs(ddx) <= SELF_DEFENSE_DIST ||
+              towardsBase(d)) &&
             safeFire(me, ally, d) &&
             firstObstacle(me, d, Math.abs(ddx))?.kind !== "steel"
           ) {
@@ -365,29 +413,43 @@ export function startBot(
       if (Math.abs(me.x - ANCHOR.x) > 8) dir = me.x < ANCHOR.x ? "RIGHT" : "LEFT";
       else if (Math.abs(me.y - ANCHOR.y) > 8) dir = me.y < ANCHOR.y ? "DOWN" : "UP";
       if (stuckTicks > 10) {
-        dir = perpendicular(dir);
-        stuckTicks = 0;
+        if (
+          !blastTried &&
+          safeFire(me, ally, dir) &&
+          !wastedShot(me, dir, 0x40)
+        ) {
+          blastTried = true;
+          stuckTicks = 6;
+          fire = true;
+        } else {
+          dir = perpendicular(dir);
+          stuckTicks = 0;
+          blastTried = false;
+        }
       }
     } else {
       // --- Выбор цели -----------------------------------------------------
-      // 0) Прорыв: враг в нижней трети — угроза орлу, бросаем всё на него.
-      // 1) Враг в упор — самозащита немедленно.
-      // 2) Иначе держим залоченную цель, пока она жива (без перескоков).
-      // 3) Иначе — враг, ближайший к базе, с поправкой на нас.
+      // Защитник, не охотник: в погоню годятся только враги в радиусе от
+      // орла — иначе бот уезжал на чужой спавн, а базу сносили.
+      // 0) Прорыв: враг у самой базы — бросаем всё на него.
+      // 1) Враг в упор — самозащита немедленно (любой, без радиуса).
+      // 2) Иначе держим залоченную цель, пока она жива и в радиусе.
+      // 3) Иначе — враг в радиусе, ближайший к базе, с поправкой на нас.
       let target: Enemy | null = null;
       let breacher: Enemy | null = null;
       let breachBest = Infinity;
       let closest: Enemy | null = null;
       let closestDist = Infinity;
+      const toBaseOf = (e: Enemy): number =>
+        Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
       for (const e of enemies) {
         const d = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
         if (d < closestDist) {
           closestDist = d;
           closest = e;
         }
-        if (e.y >= BREACH_Y) {
-          const toBase =
-            Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
+        if (isBreach(e)) {
+          const toBase = toBaseOf(e);
           if (toBase < breachBest) {
             breachBest = toBase;
             breacher = e;
@@ -398,16 +460,22 @@ export function startBot(
         target = breacher;
         targetSlot = breacher.slot;
         targetTicks = 20;
-      } else if (closest && closestDist <= SELF_DEFENSE_DIST) {
+      } else if (!homeSick && closest && closestDist <= SELF_DEFENSE_DIST) {
+        // Самозащита — отбиться, не преследовать: на пути домой стрельбу
+        // в упор даёт снайперский рефлекс, а погоня за отъезжающим врагом
+        // утаскивала бота хвостом через всю карту.
         target = closest;
       } else if (targetTicks > 0) {
-        target = enemies.find((e) => e.slot === targetSlot) ?? null;
+        target =
+          enemies.find(
+            (e) => e.slot === targetSlot && toBaseOf(e) <= ENGAGE_RADIUS,
+          ) ?? null;
       }
       if (!target) {
         let best = Infinity;
         for (const e of enemies) {
-          const toBase =
-            Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
+          const toBase = toBaseOf(e);
+          if (toBase > ENGAGE_RADIUS) continue; // не наша зона
           const toMe = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
           const score = toBase * 2 + toMe;
           if (score < best) {
@@ -415,15 +483,15 @@ export function startBot(
             target = e;
           }
         }
-        targetSlot = target!.slot;
-        targetTicks = 20; // ~0.7 c держим выбор
+        if (target) {
+          targetSlot = target.slot;
+          targetTicks = 20; // ~0.7 c держим выбор
+        }
       }
 
       // «Поводок»: далеко от орла без прорыва — возвращаемся на пост,
       // погоня наверх оставляет базу без прикрытия (проверено: game over).
-      const myLeash =
-        Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
-      if (!breacher && myLeash > LEASH_DIST) {
+      if (homeSick) {
         target = null; // цель игнорируем — идём домой
       }
 
@@ -433,10 +501,25 @@ export function startBot(
         else if (Math.abs(me.y - ANCHOR.y) > 8)
           dir = me.y < ANCHOR.y ? "DOWN" : "UP";
         if (stuckTicks > 10) {
-          dir = perpendicular(dir);
-          stuckTicks = 0;
+          // Дорогу домой прогрызаем: раньше бот только объезжал и мог
+          // кружить в лабиринте, пока базу сносили.
+          if (
+            !blastTried &&
+            safeFire(me, ally, dir) &&
+            !wastedShot(me, dir, 0x40)
+          ) {
+            blastTried = true;
+            stuckTicks = 6; // дать пуле долететь, не поворачивая
+            fire = true;
+          } else {
+            dir = perpendicular(dir);
+            dirLock = 8;
+            stuckTicks = 0;
+            blastTried = false;
+          }
         }
-        setButtons(DIR_MASK[dir] & 0xff);
+        if (fire) fireCooldown = 6;
+        setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
         return;
       }
 

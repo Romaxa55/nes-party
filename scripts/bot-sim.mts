@@ -67,10 +67,12 @@ const bot = startBot(nes, setButtons);
 
 // P1 не совсем AFK: периодически стреляет и крутится — без этого фикс
 // «бот уклоняется от пуль игрока» (слот пуль 0) не исполняется ни разу.
-const P1_DIRS = [BTN.UP, BTN.RIGHT, BTN.DOWN, BTN.LEFT];
+// Только UP/LEFT: спавн P1 вплотную к орлу, выстрел вправо сносит базу
+// (первая версия теста так и «проиграла» за 18 секунд).
+const P1_DIRS = [BTN.UP, BTN.LEFT];
 let p1Phase = 0;
 const p1Timer = setInterval(() => {
-  const d = P1_DIRS[p1Phase % 4];
+  const d = P1_DIRS[p1Phase % 2];
   p1Phase++;
   nes.buttonDown(1, d as 0);
   setTimeout(() => {
@@ -86,6 +88,11 @@ const kinds = { steel: 0, brick: 0, foe: 0, void: 0 };
 let kills = 0;
 let botDeaths = 0;
 let eagleEverBroken = false;
+let battleFrames = 0;
+let leashFrames = 0;
+let maxLeash = 0;
+let baseFellAtSec: number | null = null;
+const startedAt = Date.now();
 let prevBotBullet: { x: number; y: number } | null = null;
 const prevEnemy: Array<{ x: number; y: number } | null> = Array(8).fill(null);
 let prevBotAlive = false;
@@ -165,6 +172,9 @@ const onRay = (
   });
 
 const sample = (): void => {
+  // После падения базы идёт счёт/демо: игра сама водит «танк P2» по карте,
+  // и все счётчики превращаются в мусор — замораживаем их.
+  if (eagleEverBroken) return;
   // Выстрел бота: пуля слота 1 (пуля P2) появилась ИЛИ телепортировалась
   // назад к танку — при непрерывном огне слот не успевает освобождаться.
   const bx = mem[0xb8 + 1];
@@ -233,7 +243,19 @@ const sample = (): void => {
   // Орёл: «был цел всё время» — мгновенный сэмпл в конце ловил экраны
   // счёта/смены стадии, где тайлмап другой. Меряем только в бою (бот жив
   // или только что был жив — на межэкранах слоты танков пусты).
-  if (botAlive && mem[0x400 + 26 * 32 + 14] !== 0xc8) eagleEverBroken = true;
+  if (botAlive && mem[0x400 + 26 * 32 + 14] !== 0xc8) {
+    eagleEverBroken = true;
+    baseFellAtSec = +((Date.now() - startedAt) / 1000).toFixed(1);
+    return;
+  }
+
+  // Дисциплина поводка: доля боевого времени дальше LEASH_DIST от орла.
+  if (botAlive) {
+    battleFrames++;
+    const leash = Math.abs(mem[0x91] - 124) + Math.abs(mem[0x99] - 216);
+    if (leash > 0x70) leashFrames++;
+    if (leash > maxLeash) maxLeash = leash;
+  }
 };
 
 const gameTimer = setInterval(() => {
@@ -258,6 +280,11 @@ setTimeout(() => {
         killsPerMin: +(kills / (SECONDS / 60)).toFixed(1),
         botDeaths,
         eagleOk,
+        baseSurvivedSec: baseFellAtSec ?? SECONDS,
+        leashPct: battleFrames
+          ? +((leashFrames / battleFrames) * 100).toFixed(1)
+          : 0,
+        maxLeash,
       },
       null,
       2,
