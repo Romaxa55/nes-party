@@ -23,13 +23,17 @@ const Y0 = 0x98;
 const BX0 = 0xb8;
 const BY0 = 0xc2;
 const EMPTY = 0xff;
+/** Направление ствола танка: $A0+слот, младшие два бита (проверено вводом). */
+const AIM0 = 0xa0;
 const TILE_BASE = 0x400;
 const T_BRICK = 0x0f;
 const T_STEEL = 0x10;
 const T_BORDER = 0x11;
+const T_WATER = 0x20;
 
 const BASE = { x1: 0x68, x2: 0x90, y1: 0xc8, y2: 0xe4 };
-const BASE_CENTER = { x: 0x7c, y: 0xd8 };
+/** Центр орла и пост обороны — экспортируются для тестов-симуляций. */
+export const BASE_CENTER = { x: 0x7c, y: 0xd8 };
 
 const TICK_MS = 33; // 30 решений в секунду
 const AIM_TOLERANCE = 6;
@@ -44,18 +48,26 @@ const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
 /** Пост обороны: чуть выше и правее орла (наша спавн-сторона). */
-const ANCHOR = { x: 0x98, y: 0xb0 };
+export const ANCHOR = { x: 0x98, y: 0xb0 };
 /** «Поводок»: дальше этого от базы в погоню не уходим. */
-const LEASH_DIST = 0x70;
-/** Возврат с гистерезисом: домой до этой глубины, иначе пинг-понг на границе. */
-const LEASH_RESET = 0x40;
-/** Цели дальше этого от орла не выбираются вовсе — защитник, не охотник. */
-const ENGAGE_RADIUS = 0x70;
+export const LEASH_DIST = 0x70;
+/** Возврат считается законченным по приходу на пост, а не по дистанции до
+ *  орла: пост сам стоит в 0x44 от орла, и порог «ближе к базе» залипал бы
+ *  навсегда (измерено ревью: флаг не снимался за весь бой). */
+const HOME_RADIUS = 12;
+/** Насколько далеко от орла встаём, перекрывая подход прорвавшемуся врагу. */
+const BLOCK_OFFSET = 0x28;
+/** Прорвавшийся ближе этого — добиваем на месте, а не перестраиваемся. */
+const BLOCK_RANGE = 0x70;
+/** Цели дальше этого от орла не выбираются вовсе — защитник, не охотник.
+ *  Строго меньше поводка: санкционированная погоня не должна сама
+ *  вытаскивать бота за поводок и тут же отменяться. */
+const ENGAGE_RADIUS = 0x60;
 /** Прорыв: враг в нижней зоне И близко к орлу (Manhattan). Раньше вся
  *  нижняя половина поля считалась прорывом — враги там есть почти всегда,
  *  поводок не включался, и бот вечно гонялся по всей карте. */
 const BREACH_Y = 0x88;
-const BREACH_RADIUS = 0x60;
+const BREACH_RADIUS = 0x80;
 
 interface Tank {
   x: number;
@@ -75,6 +87,9 @@ interface Bullet extends Tank {
 
 type Dir = "UP" | "DOWN" | "LEFT" | "RIGHT";
 
+/** Порядок направлений в байте $A0+слот: 0=UP, 1=LEFT, 2=DOWN, 3=RIGHT. */
+const AIM_DIRS: readonly Dir[] = ["UP", "LEFT", "DOWN", "RIGHT"];
+
 const DIR_MASK: Record<Dir, ButtonMask> = {
   UP: MASKS.UP,
   DOWN: MASKS.DOWN,
@@ -87,15 +102,25 @@ export interface Bot {
   resume(): void;
   stop(): void;
   readonly paused: boolean;
+  /** Один шаг решения вручную (для тестов с внешним планировщиком). */
+  tick(): void;
+  /** Режим последнего решения — для тестов и разбора полётов. */
+  readonly mode: string;
 }
 
 export function startBot(
   nes: NES,
   setButtons: (mask: ButtonMask) => void,
+  opts?: {
+    /** false — не заводить таймер: тик вызывает владелец (детерминированные
+     *  тесты гоняют бой быстрее реального времени и воспроизводимо). */
+    autoTick?: boolean;
+  },
 ): Bot {
   const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
 
   let paused = false;
+  let mode = "init";
   let dir: Dir = "UP";
   let fireCooldown = 0;
   /** Гистерезис направления — против дёрганья (в тиках 30 Гц). */
@@ -112,6 +137,16 @@ export function startBot(
   let targetTicks = 0;
   /** Возврат на пост: включается за поводком, отпускает только у орла. */
   let returning = false;
+  /** Текущий курс навигации и сколько тиков его держать. */
+  let moveDir: Dir | null = null;
+  let moveLock = 0;
+  /** Доворот ствола на цель: держится до выстрела, иначе навигация
+   *  перебивала его каждый тик и ствол не успевал повернуться. */
+  let snapDir: Dir | null = null;
+  let snapLock = 0;
+
+  /** Куда реально смотрит ствол бота прямо сейчас. */
+  const aim = (): Dir => AIM_DIRS[mem[AIM0 + 1] & 3];
 
   const read = (slot: number): Tank | null => {
     const x = mem[X0 + slot];
@@ -240,6 +275,159 @@ export function startBot(
     return sideToggle ? "UP" : "DOWN";
   };
 
+  /**
+   * Курс в точку. Дойдя (в пределах radius), танк ЗАМИРАЕТ: раньше он
+   * вечно выезжал из коробки допуска и возвращался, и эта болтанка
+   * мешала гистерезису возврата закрыться (и стоила прицела в бою).
+   * Застряли по дороге — прогрызаем кирпич, а не только объезжаем.
+   */
+  const driveTo = (
+    spot: Tank,
+    me: Tank,
+    ally: Tank | null,
+    radius: number,
+  ): ButtonMask => {
+    const dx = me.x - spot.x;
+    const dy = me.y - spot.y;
+    if (Math.abs(dx) <= radius && Math.abs(dy) <= radius) {
+      stuckTicks = 0; // стоим намеренно — это не застревание
+      blastTried = false;
+      return 0;
+    }
+    // Маршрут по карте; если пути нет (заперты сталью) — по прямой.
+    // Курс держим несколько тиков: равноценные маршруты иначе мигают
+    // каждый тик, и танк дрожит на месте вместо движения.
+    if (moveLock > 0 && moveDir && stuckTicks === 0) {
+      moveLock--;
+      dir = moveDir;
+    } else {
+      const step = pathStep(me, spot);
+      if (step) dir = step;
+      else if (Math.abs(dx) > radius) dir = dx < 0 ? "RIGHT" : "LEFT";
+      else dir = dy < 0 ? "DOWN" : "UP";
+      moveDir = dir;
+      moveLock = 6;
+    }
+
+    let fire = false;
+    // Кирпич на пути — прогрызаем сразу, не дожидаясь «застряли»: маршрут
+    // уже выбрал эту сторону как самую дешёвую.
+    const ahead = firstObstacle(me, dir, 0x18);
+    if (
+      ahead?.kind === "brick" &&
+      fireCooldown <= 0 &&
+      aim() === dir &&
+      safeFire(me, ally, dir)
+    ) {
+      fire = true;
+    }
+    if (stuckTicks > 10) {
+      if (
+        !fire &&
+        !blastTried &&
+        aim() === dir &&
+        safeFire(me, ally, dir) &&
+        !wastedShot(me, dir, 0x40)
+      ) {
+        blastTried = true;
+        stuckTicks = 6; // дать пуле долететь, не поворачивая
+        fire = true;
+      } else if (!fire) {
+        dir = perpendicular(dir);
+        stuckTicks = 0;
+        blastTried = false;
+      }
+    }
+    if (fire) fireCooldown = 6;
+    return (DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff;
+  };
+
+  /**
+   * Куда шагнуть, чтобы дойти до точки: Дейкстра по сетке тайлов 8px.
+   * Танк занимает 2x2 тайла, поэтому клетка сетки — его левый верхний
+   * угол. Кирпич проходим «со штрафом»: его прогрызают выстрелом, сталь,
+   * рамка, вода и орёл — стена. Без этого бот шёл по прямой в стену
+   * вокруг базы и замирал там (измерено: стоял, пока базу сносили).
+   */
+  const pathStep = (from: Tank, to: Tank): Dir | null => {
+    const solid = (t: number): boolean =>
+      t === T_STEEL || t === T_BORDER || t === T_WATER || t >= 0xc8;
+    const cellCost = (cx: number, cy: number): number => {
+      if (cx < 2 || cy < 2 || cx > 26 || cy > 26) return Infinity;
+      let cost = 1;
+      for (let ty = cy; ty <= cy + 1; ty++) {
+        for (let tx = cx; tx <= cx + 1; tx++) {
+          const t = mem[TILE_BASE + ty * 32 + tx];
+          if (solid(t)) return Infinity;
+          if (t >= 1 && t <= T_BRICK) cost = 8; // прострелить и подождать
+        }
+      }
+      return cost;
+    };
+
+    const sx = (from.x - 8) >> 3;
+    const sy = (from.y - 8) >> 3;
+    const gx = (to.x - 8) >> 3;
+    const gy = (to.y - 8) >> 3;
+    if (sx === gx && sy === gy) return null;
+
+    const W = 28;
+    const dist = new Int32Array(W * W).fill(0x7fffffff);
+    const first = new Int8Array(W * W).fill(-1);
+    // Ручная очередь с приоритетом: клеток мало, сортировка вставкой дешевле
+    // любых структур — этот код крутится 30 раз в секунду.
+    const queue: number[] = [sy * W + sx];
+    dist[sy * W + sx] = 0;
+    const DIRS: Array<[number, number, Dir]> = [
+      [0, -1, "UP"],
+      [0, 1, "DOWN"],
+      [-1, 0, "LEFT"],
+      [1, 0, "RIGHT"],
+    ];
+    while (queue.length) {
+      let bi = 0;
+      for (let i = 1; i < queue.length; i++) {
+        if (dist[queue[i]] < dist[queue[bi]]) bi = i;
+      }
+      const cur = queue.splice(bi, 1)[0];
+      const cx = cur % W;
+      const cy = (cur - cx) / W;
+      if (cx === gx && cy === gy) {
+        return first[cur] >= 0 ? DIRS[first[cur]][2] : null;
+      }
+      for (let i = 0; i < 4; i++) {
+        const nx = cx + DIRS[i][0];
+        const ny = cy + DIRS[i][1];
+        const step = cellCost(nx, ny);
+        if (!Number.isFinite(step)) continue;
+        const nd = dist[cur] + step;
+        const key = ny * W + nx;
+        if (nd >= dist[key]) continue;
+        dist[key] = nd;
+        first[key] = cur === sy * W + sx ? (i as number) : first[cur];
+        queue.push(key);
+      }
+    }
+    return null;
+  };
+
+  const holdPost = (me: Tank, ally: Tank | null): ButtonMask =>
+    driveTo(ANCHOR, me, ally, HOME_RADIUS);
+
+  /**
+   * Точка перехвата: встать МЕЖДУ прорвавшимся врагом и орлом. Гнаться
+   * за самим врагом бесполезно — он объезжает и добегает до базы первым
+   * (измерено: полз к орлу 3.5 с, пока бот его догонял).
+   */
+  const guardSpot = (e: Enemy): Tank => {
+    const dx = e.x - BASE_CENTER.x;
+    const dy = e.y - BASE_CENTER.y;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return { x: BASE_CENTER.x + (dx < 0 ? -BLOCK_OFFSET : BLOCK_OFFSET), y: BASE_CENTER.y };
+    }
+    return { x: BASE_CENTER.x, y: BASE_CENTER.y - BLOCK_OFFSET };
+  };
+
   const tick = (): void => {
     if (paused) return;
 
@@ -305,14 +493,14 @@ export function startBot(
             ? "UP"
             : "DOWN";
       const intercept =
-        dir === head && safeFire(me, ally, dir) && fireCooldown <= 0;
+        aim() === head && safeFire(me, ally, head) && fireCooldown <= 0;
 
       if (intercept) {
-        // Ствол уже смотрит навстречу — стреляем, НЕ поворачивая: нажатое
-        // направление разворачивает танк до выстрела, и «перехватная» пуля
-        // улетала вбок по уклонению. Уклонимся со следующего тика.
+        mode = "intercept";
+        // Ствол уже смотрит навстречу — стреляем, НЕ трогая направление:
+        // нажатая стрелка везёт танк на пулю. Уклонимся со следующего тика.
         fireCooldown = 8;
-        setButtons((DIR_MASK[head] | MASKS.A) & 0xff);
+        setButtons(MASKS.A);
         return;
       }
 
@@ -328,6 +516,7 @@ export function startBot(
               ? "LEFT"
               : "RIGHT";
       }
+      mode = "dodge";
       dir = dodgeDir;
       setButtons(DIR_MASK[dir] & 0xff);
       return;
@@ -347,9 +536,17 @@ export function startBot(
       Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
         BREACH_RADIUS;
     const breachNow = enemies.some(isBreach);
+    const atPost =
+      Math.abs(me.x - ANCHOR.x) <= HOME_RADIUS &&
+      Math.abs(me.y - ANCHOR.y) <= HOME_RADIUS;
     if (myLeash > LEASH_DIST) returning = true;
-    else if (myLeash <= LEASH_RESET) returning = false;
+    else if (atPost) returning = false;
     const homeSick = !breachNow && returning;
+    // Идём защищать базу (домой или на прорыв) — снайперский рефлекс
+    // урезаем в обоих случаях. Иначе при прорыве ограничение снималось,
+    // и бот снова уезжал за целью наверх: измерено — враг полз к орлу
+    // 3.5 секунды, пока бот доворачивался у чужого спавна.
+    const defending = homeSick || breachNow;
     const towardsBase = (d: Dir): boolean =>
       d === "DOWN"
         ? me.y < BASE_CENTER.y
@@ -358,6 +555,24 @@ export function startBot(
           : d === "LEFT"
             ? me.x > BASE_CENTER.x
             : me.x < BASE_CENTER.x;
+
+    // Незавершённый доворот важнее любых манёвров: иначе решение о
+    // выстреле принимается заново каждый тик и ствол вечно «в пути».
+    if (snapLock > 0 && snapDir) {
+      snapLock--;
+      const want = snapDir;
+      const ready = aim() === want;
+      const shoot = ready && fireCooldown <= 0 && safeFire(me, ally, want);
+      if (shoot) {
+        fireCooldown = 6;
+        snapLock = 0;
+        snapDir = null;
+      }
+      dir = want;
+      mode = `aiming:${want}`;
+      setButtons(((ready ? 0 : DIR_MASK[want]) | (shoot ? MASKS.A : 0)) & 0xff);
+      return;
+    }
 
     // --- Снайперский рефлекс: любой враг на нашей линии — мгновенный
     // доворот и выстрел, поверх текущих планов. Это «мочить проезжающих»:
@@ -376,7 +591,7 @@ export function startBot(
           const d: Dir = ddy < 0 ? "UP" : "DOWN";
           if (
             (!snap || Math.abs(ddy) < snap.dist) &&
-            (!homeSick ||
+            (!defending ||
               Math.abs(ddy) <= SELF_DEFENSE_DIST ||
               towardsBase(d)) &&
             safeFire(me, ally, d) &&
@@ -388,7 +603,7 @@ export function startBot(
           const d: Dir = ddx < 0 ? "LEFT" : "RIGHT";
           if (
             (!snap || Math.abs(ddx) < snap.dist) &&
-            (!homeSick ||
+            (!defending ||
               Math.abs(ddx) <= SELF_DEFENSE_DIST ||
               towardsBase(d)) &&
             safeFire(me, ally, d) &&
@@ -401,33 +616,37 @@ export function startBot(
       if (snap) {
         dir = snap.d;
         dirLock = 3;
-        const shoot = fireCooldown <= 0;
-        if (shoot) fireCooldown = 6;
-        setButtons((DIR_MASK[dir] | (shoot ? MASKS.A : 0)) & 0xff);
+        // Ствол уже наведён — стреляем НЕ ТРОГАЯ направление: нажатая
+        // стрелка не только поворачивает, но и везёт танк на врага, и
+        // защитник уезжал с поста (измерено: ушёл наверх, базу снесли).
+        const ready = aim() === snap.d;
+        const shoot = fireCooldown <= 0 && ready;
+        mode = "snap";
+        if (shoot) {
+          fireCooldown = 6;
+          snapLock = 0;
+          snapDir = null;
+        } else if (!ready) {
+          // Доворот занимает несколько тиков; держим его, иначе
+          // навигация в следующем же тике вернёт ствол обратно.
+          snapDir = snap.d;
+          snapLock = 8;
+        }
+        setButtons(
+          ((ready ? 0 : DIR_MASK[dir]) | (shoot ? MASKS.A : 0)) & 0xff,
+        );
         return;
       }
     }
 
     if (enemies.length === 0) {
       // Без врагов — на пост обороны у орла, а не в погоню наверх.
-      if (Math.abs(me.x - ANCHOR.x) > 8) dir = me.x < ANCHOR.x ? "RIGHT" : "LEFT";
-      else if (Math.abs(me.y - ANCHOR.y) > 8) dir = me.y < ANCHOR.y ? "DOWN" : "UP";
-      if (stuckTicks > 10) {
-        if (
-          !blastTried &&
-          safeFire(me, ally, dir) &&
-          !wastedShot(me, dir, 0x40)
-        ) {
-          blastTried = true;
-          stuckTicks = 6;
-          fire = true;
-        } else {
-          dir = perpendicular(dir);
-          stuckTicks = 0;
-          blastTried = false;
-        }
-      }
-    } else {
+      mode = "post-idle";
+      setButtons(holdPost(me, ally));
+      return;
+    }
+
+    {
       // --- Выбор цели -----------------------------------------------------
       // Защитник, не охотник: в погоню годятся только враги в радиусе от
       // орла — иначе бот уезжал на чужой спавн, а базу сносили.
@@ -457,9 +676,19 @@ export function startBot(
         }
       }
       if (breacher) {
-        target = breacher;
         targetSlot = breacher.slot;
         targetTicks = 20;
+        const near = Math.abs(breacher.x - me.x) + Math.abs(breacher.y - me.y);
+        if (near <= BLOCK_RANGE) {
+          target = breacher; // рядом — добиваем, а не перестраиваемся
+        } else {
+          // Далеко: перекрываем подход к орлу, а не гонимся хвостом —
+          // враг объезжает и добегает первым (измерено: 3.5 с форы).
+          const spot = guardSpot(breacher);
+          mode = "guard";
+          setButtons(driveTo(spot, me, ally, 10));
+          return;
+        }
       } else if (!homeSick && closest && closestDist <= SELF_DEFENSE_DIST) {
         // Самозащита — отбиться, не преследовать: на пути домой стрельбу
         // в упор даёт снайперский рефлекс, а погоня за отъезжающим врагом
@@ -496,30 +725,9 @@ export function startBot(
       }
 
       if (!target) {
-        if (Math.abs(me.x - ANCHOR.x) > 8)
-          dir = me.x < ANCHOR.x ? "RIGHT" : "LEFT";
-        else if (Math.abs(me.y - ANCHOR.y) > 8)
-          dir = me.y < ANCHOR.y ? "DOWN" : "UP";
-        if (stuckTicks > 10) {
-          // Дорогу домой прогрызаем: раньше бот только объезжал и мог
-          // кружить в лабиринте, пока базу сносили.
-          if (
-            !blastTried &&
-            safeFire(me, ally, dir) &&
-            !wastedShot(me, dir, 0x40)
-          ) {
-            blastTried = true;
-            stuckTicks = 6; // дать пуле долететь, не поворачивая
-            fire = true;
-          } else {
-            dir = perpendicular(dir);
-            dirLock = 8;
-            stuckTicks = 0;
-            blastTried = false;
-          }
-        }
-        if (fire) fireCooldown = 6;
-        setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
+        // Цели в нашей зоне нет (или идём домой) — на пост.
+        mode = homeSick ? "home" : "post";
+        setButtons(holdPost(me, ally));
         return;
       }
 
@@ -533,6 +741,23 @@ export function startBot(
       else if (Math.abs(dy) <= AIM_TOLERANCE) want = dx < 0 ? "LEFT" : "RIGHT";
       else if (Math.abs(dx) > Math.abs(dy)) want = dx < 0 ? "LEFT" : "RIGHT";
       else want = dy < 0 ? "UP" : "DOWN";
+
+      // Союзник встал на линии между нами и целью: стрелять нельзя
+      // (железное правило), а ехать в него бессмысленно — танки друг
+      // сквозь друга не ходят. Обходим сбоку, иначе бот топтался на
+      // месте, пока враг полз к орлу мимо (измерено в симуляции).
+      if (ally && onFireLine(me, ally, want)) {
+        const allyDist =
+          want === "UP" || want === "DOWN"
+            ? Math.abs(ally.y - me.y)
+            : Math.abs(ally.x - me.x);
+        const targetDist =
+          want === "UP" || want === "DOWN" ? Math.abs(dy) : Math.abs(dx);
+        if (allyDist <= targetDist) {
+          want = perpendicular(want);
+          dirLock = 8;
+        }
+      }
 
       if (aligned) {
         dir = want;
@@ -583,7 +808,11 @@ export function startBot(
           scanDist = Math.min(scanDist, Math.abs(e.x - me.x));
         }
       }
+      // Стреляем только когда ствол уже смотрит туда, что проверили:
+      // танк доворачивается не мгновенно, и «выстрел вдогонку повороту»
+      // улетал по старому стволу мимо всех проверок.
       if (
+        aim() === dir &&
         safeFire(me, ally, dir) &&
         fireCooldown <= 0 &&
         !wastedShot(me, dir, scanDist)
@@ -593,14 +822,19 @@ export function startBot(
     }
 
     if (fire) fireCooldown = 6;
+    mode = "hunt";
     setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
   };
 
-  const timer = setInterval(tick, TICK_MS);
+  const timer =
+    opts?.autoTick === false ? null : setInterval(tick, TICK_MS);
 
   return {
     get paused() {
       return paused;
+    },
+    get mode() {
+      return mode;
     },
     pause() {
       paused = true;
@@ -610,8 +844,9 @@ export function startBot(
       paused = false;
     },
     stop() {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       setButtons(0);
     },
+    tick,
   };
 }
