@@ -50,8 +50,8 @@ const CONNECT_TIMEOUT_MS = 20_000;
 /** Игрок 2 плюс несколько зрителей; дальше — отказ, чтобы не выесть аплинк хоста. */
 const MAX_PEERS = 6;
 
-/** 0 — зритель, 1/2 — контроллеры NES. */
-export type Slot = 0 | 1 | 2;
+/** 0 — зритель, 1-4 — контроллеры NES (3/4 — Four Score в 4P-ромхаках). */
+export type Slot = 0 | 1 | 2 | 3 | 4;
 
 type Message =
   | { t: "hello" }
@@ -175,8 +175,10 @@ export class HostSession {
   private stream: MediaStream | null = null;
   private hostPlays = true;
 
+  /** Сколько контроллеров раздавать клиентам (2 обычно, 4 для 4P-ромхаков). */
+  maxPlayers: 2 | 4 = 2;
   /** Ввод от сетевого игрока: слот и маска кнопок. */
-  onInput: (slot: 1 | 2, mask: ButtonMask) => void = () => {};
+  onInput: (slot: 1 | 2 | 3 | 4, mask: ButtonMask) => void = () => {};
   /** Список подключённых изменился. */
   onPeersChange: (peers: PeerInfo[]) => void = () => {};
   /** Ошибка Peer после создания комнаты (сокет, WebRTC-переговоры и т.п.). */
@@ -388,7 +390,9 @@ export class HostSession {
   private freeSlot(): Slot {
     const taken = new Set([...this.peers.values()].map((p) => p.slot));
     if (!this.hostPlays && !taken.has(1)) return 1;
-    if (!taken.has(2)) return 2;
+    for (let s = 2; s <= this.maxPlayers; s++) {
+      if (!taken.has(s as Slot)) return s as Slot;
+    }
     return 0;
   }
 

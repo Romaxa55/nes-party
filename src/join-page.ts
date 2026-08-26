@@ -110,8 +110,9 @@ async function connect(): Promise<void> {
   };
   session.onRoster = (l) => {
     const parts: string[] = [];
-    if (l.some((e) => e.s === 1)) parts.push("P1");
-    if (l.some((e) => e.s === 2)) parts.push("P2");
+    for (let s = 1; s <= 4; s++) {
+      if (l.some((e) => e.s === s)) parts.push(`P${s}`);
+    }
     const specs = l.filter((e) => e.s === 0).length;
     if (specs) parts.push(`${specs} watching`);
     rosterEl.textContent = parts.length ? `In room: ${parts.join(", ")}` : "";
