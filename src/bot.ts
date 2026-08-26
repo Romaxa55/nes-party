@@ -27,6 +27,12 @@ const AIM_TOLERANCE = 6;
 const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
+/** Пост обороны: чуть выше и правее орла (наша спавн-сторона). */
+const ANCHOR = { x: 0x98, y: 0xb0 };
+/** «Поводок»: дальше этого от базы в погоню не уходим. */
+const LEASH_DIST = 0x70;
+/** Враг ниже этой линии — прорыв к базе, бросаем всё. */
+const BREACH_Y = 0x88;
 
 interface Tank {
   x: number;
@@ -225,17 +231,22 @@ export function startBot(
     let fire = false;
 
     if (enemies.length === 0) {
-      if (me.y > 0x60) dir = "UP";
+      // Без врагов — на пост обороны у орла, а не в погоню наверх.
+      if (Math.abs(me.x - ANCHOR.x) > 8) dir = me.x < ANCHOR.x ? "RIGHT" : "LEFT";
+      else if (Math.abs(me.y - ANCHOR.y) > 8) dir = me.y < ANCHOR.y ? "DOWN" : "UP";
       if (stuckTicks > 10) {
         dir = perpendicular(dir);
         stuckTicks = 0;
       }
     } else {
       // --- Выбор цели -----------------------------------------------------
-      // 1) Враг в упор — самозащита немедленно, никаких приоритетов базы.
+      // 0) Прорыв: враг в нижней трети — угроза орлу, бросаем всё на него.
+      // 1) Враг в упор — самозащита немедленно.
       // 2) Иначе держим залоченную цель, пока она жива (без перескоков).
-      // 3) Иначе — защита орла: враг, ближайший к базе, с поправкой на нас.
+      // 3) Иначе — враг, ближайший к базе, с поправкой на нас.
       let target: Enemy | null = null;
+      let breacher: Enemy | null = null;
+      let breachBest = Infinity;
       let closest: Enemy | null = null;
       let closestDist = Infinity;
       for (const e of enemies) {
@@ -244,8 +255,20 @@ export function startBot(
           closestDist = d;
           closest = e;
         }
+        if (e.y >= BREACH_Y) {
+          const toBase =
+            Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y);
+          if (toBase < breachBest) {
+            breachBest = toBase;
+            breacher = e;
+          }
+        }
       }
-      if (closest && closestDist <= SELF_DEFENSE_DIST) {
+      if (breacher) {
+        target = breacher;
+        targetSlot = breacher.slot;
+        targetTicks = 20;
+      } else if (closest && closestDist <= SELF_DEFENSE_DIST) {
         target = closest;
       } else if (targetTicks > 0) {
         target = enemies.find((e) => e.slot === targetSlot) ?? null;
@@ -266,8 +289,29 @@ export function startBot(
         targetTicks = 20; // ~0.7 c держим выбор
       }
 
-      const dx = target!.x - me.x;
-      const dy = target!.y - me.y;
+      // «Поводок»: далеко от орла без прорыва — возвращаемся на пост,
+      // погоня наверх оставляет базу без прикрытия (проверено: game over).
+      const myLeash =
+        Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
+      if (!breacher && myLeash > LEASH_DIST) {
+        target = null; // цель игнорируем — идём домой
+      }
+
+      if (!target) {
+        if (Math.abs(me.x - ANCHOR.x) > 8)
+          dir = me.x < ANCHOR.x ? "RIGHT" : "LEFT";
+        else if (Math.abs(me.y - ANCHOR.y) > 8)
+          dir = me.y < ANCHOR.y ? "DOWN" : "UP";
+        if (stuckTicks > 10) {
+          dir = perpendicular(dir);
+          stuckTicks = 0;
+        }
+        setButtons(DIR_MASK[dir] & 0xff);
+        return;
+      }
+
+      const dx = target.x - me.x;
+      const dy = target.y - me.y;
 
       let want: Dir;
       const aligned =
@@ -298,16 +342,15 @@ export function startBot(
         }
       }
 
-      if (
-        onFireLine(me, target!, dir) &&
-        safeFire(me, ally, dir) &&
-        fireCooldown <= 0
-      ) {
+      // Доктрина огня: стрелять почти постоянно, когда линия безопасна, —
+      // как играют люди: пули прогрызают кирпич и ловят врагов; идеальное
+      // выравнивание — редкость в лабиринте, ждать его = не стрелять вовсе.
+      if (safeFire(me, ally, dir) && fireCooldown <= 0) {
         fire = true;
       }
     }
 
-    if (fire) fireCooldown = 8;
+    if (fire) fireCooldown = 6;
     setButtons((DIR_MASK[dir] | (fire ? MASKS.A : 0)) & 0xff);
   };
 

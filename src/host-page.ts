@@ -99,7 +99,11 @@ const preferredRoom = query.get("room") ?? undefined;
 const tvMode = query.get("tv") === "1";
 if (tvMode) hostPlays = false;
 
-async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
+async function begin(
+  rom: Uint8Array,
+  ggCodes?: string[],
+  ramPatches?: Array<{ a: number; v: number }>,
+): Promise<void> {
   if (started) return;
   started = true;
   const gg = ggCodes?.length ? ggCodes : queryGg;
@@ -124,6 +128,7 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
       canvas,
       audio,
       ggCodes: gg,
+      ramPatches,
       onStats: (s) => {
         hostStats.textContent =
           `${s.fps.toFixed(0)} fps · frame ${ms(s.frameMs)} ms` +
@@ -283,22 +288,43 @@ async function begin(rom: Uint8Array, ggCodes?: string[]): Promise<void> {
 const romUrl = new URLSearchParams(location.search).get("rom");
 if (romUrl) void beginFromUrl(romUrl);
 
-/** Читы конкретного файла из манифеста — чтобы ?rom= получал их так же,
- *  как галерея (бесконечные жизни не должны зависеть от способа запуска). */
-async function ggFromManifest(pathname: string): Promise<string[] | undefined> {
+/** Читы файла из манифеста: gg-коды и RAM-фризы — чтобы ?rom= получал их
+ *  так же, как галерея (читы не должны зависеть от способа запуска). */
+interface ManifestCheats {
+  gg?: string[];
+  ram?: Array<{ a: number; v: number }>;
+}
+function parseCheats(r: { gg?: unknown; ram?: unknown }): ManifestCheats {
+  return {
+    gg: Array.isArray(r.gg)
+      ? r.gg.filter((c): c is string => typeof c === "string")
+      : undefined,
+    ram: Array.isArray(r.ram)
+      ? r.ram
+          .filter(
+            (p): p is { a: number | string; v: number } =>
+              !!p && typeof p === "object" && "a" in p && "v" in p,
+          )
+          .map((p) => ({ a: Number(p.a), v: Number(p.v) }))
+          .filter((p) => Number.isFinite(p.a) && Number.isFinite(p.v))
+      : undefined,
+  };
+}
+
+async function cheatsFromManifest(
+  pathname: string,
+): Promise<ManifestCheats | undefined> {
   try {
     const res = await fetch("/roms/index.json", { credentials: "omit" });
     if (!res.ok) return undefined;
     const parsed = (await res.json()) as {
-      roms?: Array<{ file?: unknown; gg?: unknown }>;
+      roms?: Array<{ file?: unknown; gg?: unknown; ram?: unknown }>;
     };
     const file = pathname.split("/").pop();
     const hit = (parsed.roms ?? []).find(
       (r) => typeof r?.file === "string" && r.file === file,
     );
-    return Array.isArray(hit?.gg)
-      ? hit.gg.filter((c): c is string => typeof c === "string")
-      : undefined;
+    return hit ? parseCheats(hit) : undefined;
   } catch {
     return undefined;
   }
@@ -310,11 +336,11 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
   pickStatus.hidden = false;
 
   let bytes: Uint8Array;
-  let manifestGg: string[] | undefined;
+  let cheats: ManifestCheats | undefined;
   try {
     const url = new URL(raw, location.href);
     if (!ggCodes?.length && !queryGg.length) {
-      manifestGg = await ggFromManifest(url.pathname);
+      cheats = await cheatsFromManifest(url.pathname);
     }
     // Отсекает data:, blob: и чужие http: — источники, которых в честной
     // ссылке быть не может.
@@ -352,7 +378,7 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
     return;
   }
   pickStatus.hidden = true;
-  void begin(bytes, ggCodes?.length ? ggCodes : manifestGg);
+  void begin(bytes, ggCodes?.length ? ggCodes : cheats?.gg, cheats?.ram);
 }
 
 /**
@@ -362,22 +388,19 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
  * не появляется.
  */
 async function loadGallery(): Promise<void> {
-  let list: Array<{ name: string; file: string; gg?: string[] }> = [];
+  let list: Array<{ name: string; file: string; cheats: ManifestCheats }> = [];
   try {
     const res = await fetch("/roms/index.json", { credentials: "omit" });
     if (!res.ok) return;
     const parsed = (await res.json()) as {
-      roms?: Array<{ name?: unknown; file?: unknown; gg?: unknown }>;
+      roms?: Array<{ name?: unknown; file?: unknown; gg?: unknown; ram?: unknown }>;
     };
     list = (parsed.roms ?? [])
       .filter(
-        (r): r is { name: string; file: string; gg?: string[] } =>
+        (r): r is { name: string; file: string; gg?: unknown; ram?: unknown } =>
           typeof r?.name === "string" && typeof r?.file === "string",
       )
-      .map((r) => ({
-        ...r,
-        gg: Array.isArray(r.gg) ? r.gg.filter((c) => typeof c === "string") : undefined,
-      }));
+      .map((r) => ({ name: r.name, file: r.file, cheats: parseCheats(r) }));
   } catch {
     return; // нет манифеста — нет галереи
   }
@@ -388,11 +411,10 @@ async function loadGallery(): Promise<void> {
   for (const rom of list) {
     const btn = document.createElement("button");
     btn.className = "ghost";
-    // Читы из манифеста (например, бесконечные жизни) — помечаем в кнопке.
-    btn.textContent = rom.gg?.length ? `${rom.name} · ∞ lives` : rom.name;
-    btn.addEventListener("click", () =>
-      void beginFromUrl(`/roms/${rom.file}`, rom.gg),
-    );
+    const hasCheats = rom.cheats.gg?.length || rom.cheats.ram?.length;
+    btn.textContent = hasCheats ? `${rom.name} · ∞ lives` : rom.name;
+    // Без явных кодов: beginFromUrl сам возьмёт из манифеста и gg, и ram.
+    btn.addEventListener("click", () => void beginFromUrl(`/roms/${rom.file}`));
     gallery.append(btn);
   }
 }
