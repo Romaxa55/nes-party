@@ -74,6 +74,15 @@ text-only upload channels). The manifest exists only where the owner put
 it: local `public/roms/` or their own VM — never in the repository or on
 shared hosting.
 
+Optional manifest fields: `"gg": ["CODE"]` — Game Genie codes,
+`"ram": [{"a": 0, "v": 0}]` — per-frame RAM freezes, `"p4": true` —
+a four-player ROM hack: the emulator turns on an emulated NES Four Score
+adapter and the room hands out four controller seats (also `?p4=1` in the
+URL). Games built for the Famicom expansion-port 4-player adapter use a
+different protocol and will not work. The Battle City bot is disabled in
+4P rooms: its RAM map targets the original game, where the hack's player
+slots would look like enemies.
+
 `scripts/vibhost-upload-roms.sh` uploads `public/roms/*.b64` + the manifest
 to the VibHost VM (needs `VHP_TOKEN`). Re-run it after every
 `vh_redeploy_project` — a redeploy re-clones the repository and the

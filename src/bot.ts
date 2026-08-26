@@ -7,7 +7,12 @@ import { MASKS, type ButtonMask } from "./controls";
  * Карта RAM снята реверсом на официальном дампе (Namcot Collection) и
  * проверена живым вводом: X танков $90-$97, Y $98-$9F (слот 0 — P1,
  * слот 1 — P2, слоты 2-7 — враги, 0xFF — пусто); пули в тех же слотах:
- * X $B8+слот, Y $C2+слот.
+ * X $B8+слот, Y $C2+слот. Координаты — центр танка в экранных пикселях.
+ *
+ * Поле: тайлы 8px в $400+, stride 32, индекс (y>>3)*32+(x>>3); поле
+ * занимает тайлы 2-27 по обеим осям. Значения: $0F кирпич (пуля грызёт),
+ * $10 сталь (глушит пулю), $11 рамка/панель, $C8-$CB орёл, прочее
+ * (вода/лёд/лес) пуле не мешает.
  *
  * Железные правила: бот НИКОГДА не стреляет, если на линии огня союзник
  * или зона базы. Тик 30 Гц — реакции на пулю в упор хватает.
@@ -18,6 +23,10 @@ const Y0 = 0x98;
 const BX0 = 0xb8;
 const BY0 = 0xc2;
 const EMPTY = 0xff;
+const TILE_BASE = 0x400;
+const T_BRICK = 0x0f;
+const T_STEEL = 0x10;
+const T_BORDER = 0x11;
 
 const BASE = { x1: 0x68, x2: 0x90, y1: 0xc8, y2: 0xe4 };
 const BASE_CENTER = { x: 0x7c, y: 0xd8 };
@@ -100,7 +109,11 @@ export function startBot(
   const prevBullets: Array<Tank | null> = Array(8).fill(null);
   const readBullets = (): Bullet[] => {
     const out: Bullet[] = [];
-    for (let s = 2; s < 8; s++) {
+    // Слот 0 — пуля P1: она тоже опасна (замораживает союзника), полевой
+    // случай «зареспаунился и убил бота» — бот её просто не видел.
+    // Слот 1 — своя пуля, её пропускаем.
+    for (let s = 0; s < 8; s++) {
+      if (s === 1) continue;
       const x = mem[BX0 + s];
       const y = mem[BY0 + s];
       if (x === EMPTY || y === EMPTY) {
@@ -108,10 +121,74 @@ export function startBot(
         continue;
       }
       const prev = prevBullets[s];
-      if (prev) out.push({ x, y, dx: x - prev.x, dy: y - prev.y });
+      if (prev) {
+        const dx = x - prev.x;
+        const dy = y - prev.y;
+        // Слот переиспользуется без промежуточного FF: склейка конца старой
+        // пули с началом новой даёт мусорный вектор — отбрасываем сэмпл.
+        if (Math.abs(dx) <= 24 && Math.abs(dy) <= 24) {
+          out.push({ x, y, dx, dy });
+        }
+      }
       prevBullets[s] = { x, y };
     }
     return out;
+  };
+
+  /**
+   * Первая преграда на линии выстрела: сталь — пуля погибнет без пользы;
+   * кирпич (включая прогрызенные четвертинки $01-$0E) — выстрел полезен;
+   * рамка поля ($11 и выход за границы) — пусто до края. Неизвестные
+   * значения тайлов считаются пустотой: на экзотических стадиях бот
+   * безопасно откатывается к старому поведению. Пуля шире точки, поэтому
+   * на стыке тайлов смотрим обе стороны линии; кирпич приоритетнее стали —
+   * пуля выгрызает свою половину стыка.
+   */
+  const firstObstacle = (
+    from: Tank,
+    d: Dir,
+    dist: number,
+  ): { kind: "steel" | "brick" | "border"; dist: number } | null => {
+    const sx = d === "LEFT" ? -8 : d === "RIGHT" ? 8 : 0;
+    const sy = d === "UP" ? -8 : d === "DOWN" ? 8 : 0;
+    // старт от кромки корпуса (центр ±8) плюс полшага
+    let x = from.x + sx * 1.5;
+    let y = from.y + sy * 1.5;
+    for (let travelled = 12; travelled < dist; travelled += 8) {
+      if (x < 16 || x > 223 || y < 16 || y > 223) {
+        return { kind: "border", dist: travelled };
+      }
+      const a =
+        sx !== 0
+          ? mem[TILE_BASE + ((y - 2) >> 3) * 32 + (x >> 3)]
+          : mem[TILE_BASE + (y >> 3) * 32 + ((x - 2) >> 3)];
+      const b =
+        sx !== 0
+          ? mem[TILE_BASE + ((y + 2) >> 3) * 32 + (x >> 3)]
+          : mem[TILE_BASE + (y >> 3) * 32 + ((x + 2) >> 3)];
+      const brick =
+        (a >= 1 && a <= T_BRICK) || (b >= 1 && b <= T_BRICK);
+      if (brick) return { kind: "brick", dist: travelled };
+      if (a === T_STEEL || b === T_STEEL) {
+        return { kind: "steel", dist: travelled };
+      }
+      if (a === T_BORDER || b === T_BORDER) {
+        return { kind: "border", dist: travelled };
+      }
+      x += sx;
+      y += sy;
+    }
+    return null;
+  };
+
+  /** Выстрел в направлении d бесполезен: первым на пути стоит бетон/рамка. */
+  const wastedShot = (from: Tank, d: Dir, dist: number): boolean => {
+    const hit = firstObstacle(from, d, dist);
+    if (!hit) return false;
+    // Рамка блокирует только в упор: дальний «пустой» выстрел безвреден,
+    // а враги как цели в карте тайлов не видны.
+    if (hit.kind === "border") return hit.dist <= 0x20;
+    return hit.kind === "steel";
   };
 
   const inBaseLine = (from: Tank, d: Dir): boolean => {
@@ -213,6 +290,15 @@ export function startBot(
       const intercept =
         dir === head && safeFire(me, ally, dir) && fireCooldown <= 0;
 
+      if (intercept) {
+        // Ствол уже смотрит навстречу — стреляем, НЕ поворачивая: нажатое
+        // направление разворачивает танк до выстрела, и «перехватная» пуля
+        // улетала вбок по уклонению. Уклонимся со следующего тика.
+        fireCooldown = 8;
+        setButtons((DIR_MASK[head] | MASKS.A) & 0xff);
+        return;
+      }
+
       // Уклонение выбирается ОДИН раз на угрозу и держится до её конца —
       // пересчёт каждый тик давал дребезг на границе линии.
       if (!dodgeDir) {
@@ -226,8 +312,7 @@ export function startBot(
               : "RIGHT";
       }
       dir = dodgeDir;
-      if (intercept) fireCooldown = 8;
-      setButtons((DIR_MASK[dir] | (intercept ? MASKS.A : 0)) & 0xff);
+      setButtons(DIR_MASK[dir] & 0xff);
       return;
     }
     dodgeDir = null;
@@ -244,7 +329,11 @@ export function startBot(
         const ddy = e.y - me.y;
         if (Math.abs(ddx) <= SNAP_TOLERANCE && Math.abs(ddy) <= SNAP_RANGE) {
           const d: Dir = ddy < 0 ? "UP" : "DOWN";
-          if ((!snap || Math.abs(ddy) < snap.dist) && safeFire(me, ally, d)) {
+          if (
+            (!snap || Math.abs(ddy) < snap.dist) &&
+            safeFire(me, ally, d) &&
+            firstObstacle(me, d, Math.abs(ddy))?.kind !== "steel"
+          ) {
             snap = { d, dist: Math.abs(ddy) };
           }
         } else if (
@@ -252,7 +341,11 @@ export function startBot(
           Math.abs(ddx) <= SNAP_RANGE
         ) {
           const d: Dir = ddx < 0 ? "LEFT" : "RIGHT";
-          if ((!snap || Math.abs(ddx) < snap.dist) && safeFire(me, ally, d)) {
+          if (
+            (!snap || Math.abs(ddx) < snap.dist) &&
+            safeFire(me, ally, d) &&
+            firstObstacle(me, d, Math.abs(ddx))?.kind !== "steel"
+          ) {
             snap = { d, dist: Math.abs(ddx) };
           }
         }
@@ -367,7 +460,12 @@ export function startBot(
       }
 
       if (stuckTicks > 10) {
-        if (!blastTried && safeFire(me, ally, dir)) {
+        // Упёрлись в сталь/рамку — пробивать бесполезно, сразу в объезд.
+        if (
+          !blastTried &&
+          safeFire(me, ally, dir) &&
+          !wastedShot(me, dir, 0x40)
+        ) {
           blastTried = true;
           stuckTicks = 6; // дать пуле долететь, не поворачивая
           fire = true;
@@ -382,7 +480,31 @@ export function startBot(
       // Доктрина огня: стрелять почти постоянно, когда линия безопасна, —
       // как играют люди: пули прогрызают кирпич и ловят врагов; идеальное
       // выравнивание — редкость в лабиринте, ждать его = не стрелять вовсе.
-      if (safeFire(me, ally, dir) && fireCooldown <= 0) {
+      // Кроме случая, когда первым на линии стоит бетон: там пуля гибнет
+      // впустую (полевой отчёт «стреляет в бетон»).
+      // Скан режем по ближайшему врагу на линии ствола: враг ближе стали —
+      // цель поражаема, стена за его спиной не повод молчать.
+      let scanDist = 0xd0;
+      for (const e of enemies) {
+        if (dir === "UP" || dir === "DOWN") {
+          if (
+            Math.abs(e.x - me.x) <= SNAP_TOLERANCE &&
+            (dir === "UP" ? e.y < me.y : e.y > me.y)
+          ) {
+            scanDist = Math.min(scanDist, Math.abs(e.y - me.y));
+          }
+        } else if (
+          Math.abs(e.y - me.y) <= SNAP_TOLERANCE &&
+          (dir === "LEFT" ? e.x < me.x : e.x > me.x)
+        ) {
+          scanDist = Math.min(scanDist, Math.abs(e.x - me.x));
+        }
+      }
+      if (
+        safeFire(me, ally, dir) &&
+        fireCooldown <= 0 &&
+        !wastedShot(me, dir, scanDist)
+      ) {
         fire = true;
       }
     }

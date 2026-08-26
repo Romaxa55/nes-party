@@ -35,6 +35,8 @@ let started = false;
 // Играет ли хост сам за P1. Выключается чекбоксом — режим «этот экран
 // телевизор, все игроки на телефонах».
 let hostPlays = true;
+/** Сколько контроллеров раздаёт комната; 4 — для 4P-ромхаков. */
+let sessionMaxPlayers = 2;
 let lastPeers: PeerInfo[] = [];
 
 setupFullscreenButton($("fs-btn"));
@@ -108,10 +110,14 @@ async function begin(
   rom: Uint8Array,
   ggCodes?: string[],
   ramPatches?: Array<{ a: number; v: number }>,
+  players4?: boolean,
 ): Promise<void> {
   if (started) return;
   started = true;
-  const gg = ggCodes?.length ? ggCodes : queryGg;
+  // ?gg= — ручное переопределение, оно сильнее кодов из манифеста.
+  const gg = queryGg.length ? queryGg : ggCodes;
+  const p4 = players4 || query.get("p4") === "1";
+  sessionMaxPlayers = p4 ? 4 : 2;
   pickError.hidden = true;
   screenPick.hidden = true;
   screenGame.hidden = false;
@@ -134,6 +140,7 @@ async function begin(
       audio,
       ggCodes: gg,
       ramPatches,
+      players4: p4,
       onStats: (s) => {
         hostStats.textContent =
           `${s.fps.toFixed(0)} fps · frame ${ms(s.frameMs)} ms` +
@@ -183,7 +190,7 @@ async function begin(
   netStatus.textContent = "Creating room…";
   let session: HostSession;
   try {
-    session = await HostSession.create(preferredRoom);
+    session = await HostSession.create(preferredRoom, p4 ? 4 : 2);
   } catch (err) {
     netStatus.textContent =
       `Could not create a room (${(err as Error).message}). ` +
@@ -192,6 +199,7 @@ async function begin(
   }
   sessionRef = session;
   session.setHostPlays(hostPlays); // если чекбокс сняли до регистрации
+  renderPeers(lastPeers); // HUD сразу показывает все места, включая P3/P4
 
   chatSend = (text) => session.sendChat(text);
   session.onChat = (from, text) => chat.addMessage(from, text);
@@ -204,11 +212,18 @@ async function begin(
   session.onVoiceCall = (call) => hub.accept(call);
   micBtn.disabled = false; // хаб готов — кнопка оживает
 
-  // Бот стартует на паузе и включается кнопкой.
-  bot = startBot(engine.nes, (mask) => engine?.setButtons(2, mask));
-  bot.pause();
-  botBtn.disabled = false;
-  syncBot();
+  if (p4) {
+    // Бот заточен под RAM-карту оригинала: в 4P-хаке слоты врагов 2-3 —
+    // живые игроки, он целился бы в них. До адаптации — выключен.
+    botBtn.disabled = true;
+    botBtn.title = "Bot is not adapted to the 4-player hack yet";
+  } else {
+    // Бот стартует на паузе и включается кнопкой.
+    bot = startBot(engine.nes, (mask) => engine?.setButtons(2, mask));
+    bot.pause();
+    botBtn.disabled = false;
+    syncBot();
+  }
 
   session.onInput = (slot, mask) => {
     // Живой ввод на P2 перебивает бота (он и так на паузе, но на всякий).
@@ -298,9 +313,20 @@ if (romUrl) void beginFromUrl(romUrl);
 interface ManifestCheats {
   gg?: string[];
   ram?: Array<{ a: number; v: number }>;
+  /** 4-player ромхак: включить Four Score и раздавать 4 слота. */
+  p4?: boolean;
 }
-function parseCheats(r: { gg?: unknown; ram?: unknown }): ManifestCheats {
+/** Сырая запись из /roms/index.json — все поля недоверенные. */
+interface ManifestRomEntry {
+  name?: unknown;
+  file?: unknown;
+  gg?: unknown;
+  ram?: unknown;
+  p4?: unknown;
+}
+function parseCheats(r: ManifestRomEntry): ManifestCheats {
   return {
+    p4: r.p4 === true,
     gg: Array.isArray(r.gg)
       ? r.gg.filter((c): c is string => typeof c === "string")
       : undefined,
@@ -322,9 +348,7 @@ async function cheatsFromManifest(
   try {
     const res = await fetch("/roms/index.json", { credentials: "omit" });
     if (!res.ok) return undefined;
-    const parsed = (await res.json()) as {
-      roms?: Array<{ file?: unknown; gg?: unknown; ram?: unknown }>;
-    };
+    const parsed = (await res.json()) as { roms?: ManifestRomEntry[] };
     const file = pathname.split("/").pop();
     const hit = (parsed.roms ?? []).find(
       (r) => typeof r?.file === "string" && r.file === file,
@@ -344,9 +368,9 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
   let cheats: ManifestCheats | undefined;
   try {
     const url = new URL(raw, location.href);
-    if (!ggCodes?.length && !queryGg.length) {
-      cheats = await cheatsFromManifest(url.pathname);
-    }
+    // Манифест читается всегда: p4 и RAM-фризы не зависят от того,
+    // переопределил ли пользователь gg-коды через URL.
+    cheats = await cheatsFromManifest(url.pathname);
     // Отсекает data:, blob: и чужие http: — источники, которых в честной
     // ссылке быть не может.
     if (url.protocol !== "https:" && url.origin !== location.origin) {
@@ -383,7 +407,12 @@ async function beginFromUrl(raw: string, ggCodes?: string[]): Promise<void> {
     return;
   }
   pickStatus.hidden = true;
-  void begin(bytes, ggCodes?.length ? ggCodes : cheats?.gg, cheats?.ram);
+  void begin(
+    bytes,
+    ggCodes?.length ? ggCodes : cheats?.gg,
+    cheats?.ram,
+    cheats?.p4,
+  );
 }
 
 /**
@@ -417,7 +446,10 @@ async function loadGallery(): Promise<void> {
     const btn = document.createElement("button");
     btn.className = "ghost";
     const hasCheats = rom.cheats.gg?.length || rom.cheats.ram?.length;
-    btn.textContent = hasCheats ? `${rom.name} · ∞ lives` : rom.name;
+    const marks = [hasCheats ? "∞ lives" : null, rom.cheats.p4 ? "4P" : null]
+      .filter(Boolean)
+      .join(" · ");
+    btn.textContent = marks ? `${rom.name} · ${marks}` : rom.name;
     // Без явных кодов: beginFromUrl сам возьмёт из манифеста и gg, и ram.
     btn.addEventListener("click", () => void beginFromUrl(`/roms/${rom.file}`));
     gallery.append(btn);
@@ -428,19 +460,17 @@ void loadGallery();
 function renderPeers(list: PeerInfo[]): void {
   const ping = (p: PeerInfo | undefined): string =>
     p?.rtt ? ` ${p.rtt}ms` : "";
+  const maxP = sessionMaxPlayers;
+  const parts: string[] = [];
   const p1 = list.find((p) => p.slot === 1);
-  const p2 = list.find((p) => p.slot === 2);
+  parts.push(
+    hostPlays ? "P1: you" : p1 ? `P1: phone${ping(p1)}` : "P1: waiting",
+  );
+  for (let s = 2; s <= maxP; s++) {
+    const p = list.find((e) => e.slot === s);
+    parts.push(p ? `P${s}: on${ping(p)}` : `P${s}: waiting`);
+  }
   const watchers = list.filter((p) => p.slot === 0).length;
-  const p1Text = hostPlays
-    ? "P1: you"
-    : p1
-      ? `P1: phone${ping(p1)}`
-      : "P1: waiting";
-  const p2Text = p2 ? `P2: on${ping(p2)}` : "P2: waiting";
-  const parts = [
-    p1Text,
-    p2Text,
-    watchers ? `spectators: ${watchers}` : null,
-  ].filter(Boolean);
+  if (watchers) parts.push(`spectators: ${watchers}`);
   players.textContent = parts.join(" · ");
 }

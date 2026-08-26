@@ -48,10 +48,11 @@ const KEYBOARD_MAP: Record<string, string> = {
   ShiftLeft: "SELECT",
 };
 
-/** Применяет разницу двух масок к эмулятору через buttonDown/buttonUp. */
+/** Применяет разницу двух масок к эмулятору через buttonDown/buttonUp.
+ *  Игроки 3/4 существуют после enableFourScore (тип jsnes знает лишь 1|2). */
 export function applyButtons(
   nes: NES,
-  player: 1 | 2,
+  player: 1 | 2 | 3 | 4,
   prev: ButtonMask,
   next: ButtonMask,
 ): void {
@@ -60,8 +61,8 @@ export function applyButtons(
   for (let bit = 0; bit < 8; bit++) {
     const flag = 1 << bit;
     if (!(changed & flag)) continue;
-    if (next & flag) nes.buttonDown(player, bit as 0);
-    else nes.buttonUp(player, bit as 0);
+    if (next & flag) nes.buttonDown(player as 1, bit as 0);
+    else nes.buttonUp(player as 1, bit as 0);
   }
 }
 
@@ -330,7 +331,8 @@ export function attachKeyboard(
   // или чекбокс в фокусе (после тапа по HUD) перехватывают только Enter
   // и Space — стрелки и буквы продолжают идти в игру.
   function isUiTarget(e: KeyboardEvent): boolean {
-    const t = e.target as HTMLElement | null;
+    // target бывает window/document (синтетические события) — это не UI.
+    const t = e.target instanceof Element ? e.target : null;
     if (!t) return false;
     if (t.closest('input[type="checkbox"], button, a')) {
       return e.code === "Enter" || e.code === "Space";

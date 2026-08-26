@@ -1,6 +1,7 @@
 import { NES } from "jsnes";
 import { createBlitter } from "./bench";
 import { applyButtons, type ButtonMask } from "./controls";
+import { enableFourScore } from "./fourscore";
 import type { AudioPipe } from "./audio";
 
 const STEP_MS = 1000 / 60;
@@ -19,7 +20,7 @@ export interface EngineStats {
 export interface Engine {
   nes: NES;
   /** Желаемое состояние кнопок игрока; применяется перед следующим кадром. */
-  setButtons(player: 1 | 2, mask: ButtonMask): void;
+  setButtons(player: 1 | 2 | 3 | 4, mask: ButtonMask): void;
   stop(): void;
 }
 
@@ -41,6 +42,8 @@ export function startEngine(opts: {
    * «замороженный» чит). Надёжнее Game Genie: не зависит от версии дампа.
    */
   ramPatches?: Array<{ a: number; v: number }>;
+  /** Four Score: четыре контроллера (для 4-player ромхаков). */
+  players4?: boolean;
   onStats?: (s: EngineStats) => void;
   /** Эмулятор упал во время игры; цикл уже остановлен. */
   onError?: (err: Error) => void;
@@ -60,6 +63,7 @@ export function startEngine(opts: {
     onAudioSample: audio ? audio.onSample : undefined,
   });
   nes.loadROM(opts.rom);
+  if (opts.players4) enableFourScore(nes); // после loadROM: маппер пересоздан
 
   if (opts.ggCodes?.length) {
     for (const code of opts.ggCodes) {
@@ -72,9 +76,10 @@ export function startEngine(opts: {
     nes.gameGenie.setEnabled(true);
   }
 
-  // Желаемые и применённые маски кнопок по игрокам.
-  const desired: [ButtonMask, ButtonMask] = [0, 0];
-  const applied: [ButtonMask, ButtonMask] = [0, 0];
+  // Желаемые и применённые маски кнопок по игрокам (до четырёх).
+  const playerCount = opts.players4 ? 4 : 2;
+  const desired: ButtonMask[] = [0, 0, 0, 0];
+  const applied: ButtonMask[] = [0, 0, 0, 0];
 
   let raf = 0;
   let stopped = false;
@@ -110,10 +115,10 @@ export function startEngine(opts: {
       steps++;
       renderThisStep = accumulator < STEP_MS || steps === MAX_CATCHUP_STEPS;
 
-      for (const player of [1, 2] as const) {
+      for (let player = 1; player <= playerCount; player++) {
         const i = player - 1;
         if (applied[i] !== desired[i]) {
-          applyButtons(nes, player, applied[i], desired[i]);
+          applyButtons(nes, player as 1, applied[i], desired[i]);
           applied[i] = desired[i];
         }
       }
@@ -176,6 +181,8 @@ export function startEngine(opts: {
   return {
     nes,
     setButtons(player, mask) {
+      // Слоты 3/4 без players4 уронили бы jsnes — молча игнорируем.
+      if (player > playerCount) return;
       desired[player - 1] = mask & 0xff;
     },
     stop: shutdown,
