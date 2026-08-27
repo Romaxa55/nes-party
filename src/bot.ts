@@ -63,6 +63,8 @@ const AIMED_AT_RANGE = 0x60;
 const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
+/** Ближний бой: враг в контакте — мгновенный разворот, без общих правил. */
+const CONTACT_DIST = 0x28;
 /** Пост обороны: чуть выше и правее орла (наша спавн-сторона). */
 export const ANCHOR = { x: 0x98, y: 0xb0 };
 /** «Поводок»: дальше этого от базы в погоню не уходим. */
@@ -746,6 +748,46 @@ export function startBot(
         mode = "unaim";
         setButtons(DIR_MASK[side] & 0xff);
         return;
+      }
+    }
+
+    // Ближний бой: враг вплотную (в т.ч. ЗА СПИНОЙ) — мгновенный разворот
+    // на него и выстрел. Раньше такой враг не попадал под снайперский
+    // допуск оси, и бот «не видел» его, уезжая выравниваться по общим
+    // правилам (полевой отчёт: «сзади вплотную стоит — не стреляет»).
+    {
+      let contact: Enemy | null = null;
+      let contactDist = Infinity;
+      for (const e of enemies) {
+        const d = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
+        if (d <= CONTACT_DIST && d < contactDist) {
+          contactDist = d;
+          contact = e;
+        }
+      }
+      if (contact) {
+        const dx = contact.x - me.x;
+        const dy = contact.y - me.y;
+        const horiz = Math.abs(dx) >= Math.abs(dy);
+        const d: Dir = horiz
+          ? dx < 0
+            ? "LEFT"
+            : "RIGHT"
+          : dy < 0
+            ? "UP"
+            : "DOWN";
+        const across = horiz ? Math.abs(dy) : Math.abs(dx);
+        if (across <= 14 && safeFire(me, ally, d)) {
+          const ready = aim() === d;
+          const shoot = ready && fireCooldown <= 0;
+          if (shoot) fireCooldown = 6;
+          mode = "melee";
+          // Ствол не там — жмём разворот; наведён — стоим и стреляем.
+          setButtons(
+            ((ready ? 0 : DIR_MASK[d]) | (shoot ? MASKS.A : 0)) & 0xff,
+          );
+          return;
+        }
       }
     }
 
