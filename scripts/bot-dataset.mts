@@ -28,6 +28,10 @@ const out = fs.createWriteStream(path.join(OUT_DIR, "teacher.jsonl"));
 const BTN = { A: 0, SELECT: 2, START: 3, UP: 4, LEFT: 6 };
 const EMPTY = 0xff;
 const MAX_FRAMES = SECONDS * 60;
+// Шкала признака времени — всегда 120 с, как max_seconds в BattleCityEnv:
+// если бой в датасете другой длины, нормировка всё равно должна совпадать
+// со средой и с браузером, иначе датасет и политика разойдутся.
+const OBS_MAX_FRAMES = 120 * 60;
 
 /** Действия в том же порядке, что ACTIONS в battle_city_env.py. */
 const maskToAction = (m: ButtonMask): number => {
@@ -79,7 +83,7 @@ function obsVector(mem: number[], frame: number): number[] {
   }
   o.push(mem[0x400 + 26 * 32 + 14] === 0xc8 ? 1 : 0);
   o.push((mem[0xa1] & 3) / 3);
-  o.push(frame / MAX_FRAMES);
+  o.push(frame / OBS_MAX_FRAMES);
   return o;
 }
 

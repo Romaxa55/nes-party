@@ -44,6 +44,9 @@ function decode(l: Layer): Float32Array {
   const raw = atob(l.data);
   const bytes = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  // numpy.tobytes() в export_json.py пишет little-endian (нативный порядок
+  // всех наших машин); Float32Array читает в порядке платформы браузера —
+  // на BE-платформе вышел бы мусор, но таких целей у нас нет.
   return new Float32Array(bytes.buffer);
 }
 
@@ -74,10 +77,30 @@ export async function loadNeuroBot(
   const res = await fetch(modelUrl, { credentials: "omit" });
   if (!res.ok) throw new Error(`model HTTP ${res.status}`);
   const spec = (await res.json()) as PolicyJson;
+  // Валидация до запуска таймера: битый/усечённый JSON должен уронить этот
+  // промис (его ловит host-page), а не dense() внутри setInterval 30 раз/с.
+  if (
+    !Array.isArray(spec.layers) ||
+    spec.layers.length !== 6 ||
+    !Number.isInteger(spec.obs) ||
+    spec.obs % 2 !== 0 ||
+    !Number.isInteger(spec.actions) ||
+    spec.actions !== ACTION_MASKS.length
+  )
+    throw new Error("model JSON malformed");
   const [w1, b1, w2, b2, w3, b3] = spec.layers.map(decode);
   const h1 = spec.layers[0].shape[0];
   const h2 = spec.layers[2].shape[0];
   const nObs = spec.obs;
+  if (
+    w1.length !== h1 * nObs ||
+    b1.length !== h1 ||
+    w2.length !== h2 * h1 ||
+    b2.length !== h2 ||
+    w3.length !== spec.actions * h2 ||
+    b3.length !== spec.actions
+  )
+    throw new Error("model weight shapes mismatch");
 
   const mem = (nes as unknown as { cpu: { mem: number[] } }).cpu.mem;
 
@@ -156,7 +179,9 @@ export async function loadNeuroBot(
       sum += p[a];
     }
     let r = Math.random() * sum;
-    let action = 0;
+    // Фолбэк — последнее действие: если из-за округления r не исчерпался,
+    // виноват хвост распределения, а не действие 0 («ничего не делать»).
+    let action = spec.actions - 1;
     for (let a = 0; a < spec.actions; a++) {
       r -= p[a];
       if (r <= 0) {
