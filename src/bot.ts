@@ -63,6 +63,8 @@ const AIMED_AT_RANGE = 0x60;
 const ALLY_RADIUS = 12;
 /** Враг ближе этого — самозащита важнее охраны базы. */
 const SELF_DEFENSE_DIST = 0x30;
+/** Ближний бой: враг в контакте — мгновенный разворот, без общих правил. */
+const CONTACT_DIST = 0x28;
 /** Пост обороны: чуть выше и правее орла (наша спавн-сторона). */
 export const ANCHOR = { x: 0x98, y: 0xb0 };
 /** «Поводок»: дальше этого от базы в погоню не уходим. */
@@ -749,18 +751,69 @@ export function startBot(
       }
     }
 
-    // Далеко от орла и прорыва нет — приоритет «домой». Считается ДО
-    // снайперского рефлекса: раньше рефлекс перехватывал каждый тик
-    // (наверху всегда кто-то на линии), бот застревал в карусели
-    // довортов у чужого спавна, а базу сносили (полевой отчёт).
-    const myLeash =
-      Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
     const isBreach = (e: Enemy): boolean =>
       e.y >= LOW_LANE_Y ||
       (e.y >= BREACH_Y &&
         Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
           BREACH_RADIUS);
     const breachNow = enemies.some(isBreach);
+
+    // Ближний бой: враг вплотную (в т.ч. ЗА СПИНОЙ) — мгновенный разворот
+    // на него и выстрел. Раньше такой враг не попадал под снайперский
+    // допуск оси, и бот «не видел» его, уезжая выравниваться по общим
+    // правилам (полевой отчёт: «сзади вплотную стоит — не стреляет»).
+    {
+      let contact: Enemy | null = null;
+      let contactDist = Infinity;
+      for (const e of enemies) {
+        const d = Math.abs(e.x - me.x) + Math.abs(e.y - me.y);
+        if (d <= CONTACT_DIST && d < contactDist) {
+          contactDist = d;
+          contact = e;
+        }
+      }
+      // Осознанный риск: дуэль может длиться секунды, и на это время бот
+      // слеп к прорывам (ревью намерило эпизод 7.5 с). Прерывание дуэли
+      // при чужом прорыве ПРОБОВАЛИ — оба варианта порога стоили
+      // 15-20 фрагов и 5-9 с жизни базы на 15 боёв: добивание в упор
+      // ценнее. Прикрытие: unaim/dodge стоят выше и работают в дуэли.
+      if (contact) {
+        const dx = contact.x - me.x;
+        const dy = contact.y - me.y;
+        const horiz = Math.abs(dx) >= Math.abs(dy);
+        const d: Dir = horiz
+          ? dx < 0
+            ? "LEFT"
+            : "RIGHT"
+          : dy < 0
+            ? "UP"
+            : "DOWN";
+        const across = horiz ? Math.abs(dy) : Math.abs(dx);
+        const along = horiz ? Math.abs(dx) : Math.abs(dy);
+        if (
+          across <= 14 &&
+          safeFire(me, ally, d) &&
+          firstObstacle(me, d, along)?.kind !== "steel"
+        ) {
+          const ready = aim() === d;
+          const shoot = ready && fireCooldown <= 0;
+          if (shoot) fireCooldown = 6;
+          mode = "melee";
+          // Ствол не там — жмём разворот; наведён — стоим и стреляем.
+          setButtons(
+            ((ready ? 0 : DIR_MASK[d]) | (shoot ? MASKS.A : 0)) & 0xff,
+          );
+          return;
+        }
+      }
+    }
+
+    // Далеко от орла и прорыва нет — приоритет «домой». Считается ДО
+    // снайперского рефлекса: раньше рефлекс перехватывал каждый тик
+    // (наверху всегда кто-то на линии), бот застревал в карусели
+    // довортов у чужого спавна, а базу сносили (полевой отчёт).
+    const myLeash =
+      Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
     const atPost =
       Math.abs(me.x - ANCHOR.x) <= HOME_RADIUS &&
       Math.abs(me.y - ANCHOR.y) <= HOME_RADIUS;
