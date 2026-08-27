@@ -14,3 +14,6 @@ roms/
 
 # Видеозаписи тестовых боёв бота (генерируются scripts/bot-replay.mts)
 replays/
+
+# Нейро-модели (генерируются из ~/nes-rl, не в git)
+public/models/
