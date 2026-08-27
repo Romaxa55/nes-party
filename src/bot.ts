@@ -751,6 +751,13 @@ export function startBot(
       }
     }
 
+    const isBreach = (e: Enemy): boolean =>
+      e.y >= LOW_LANE_Y ||
+      (e.y >= BREACH_Y &&
+        Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
+          BREACH_RADIUS);
+    const breachNow = enemies.some(isBreach);
+
     // Ближний бой: враг вплотную (в т.ч. ЗА СПИНОЙ) — мгновенный разворот
     // на него и выстрел. Раньше такой враг не попадал под снайперский
     // допуск оси, и бот «не видел» его, уезжая выравниваться по общим
@@ -765,6 +772,11 @@ export function startBot(
           contact = e;
         }
       }
+      // Осознанный риск: дуэль может длиться секунды, и на это время бот
+      // слеп к прорывам (ревью намерило эпизод 7.5 с). Прерывание дуэли
+      // при чужом прорыве ПРОБОВАЛИ — оба варианта порога стоили
+      // 15-20 фрагов и 5-9 с жизни базы на 15 боёв: добивание в упор
+      // ценнее. Прикрытие: unaim/dodge стоят выше и работают в дуэли.
       if (contact) {
         const dx = contact.x - me.x;
         const dy = contact.y - me.y;
@@ -777,7 +789,12 @@ export function startBot(
             ? "UP"
             : "DOWN";
         const across = horiz ? Math.abs(dy) : Math.abs(dx);
-        if (across <= 14 && safeFire(me, ally, d)) {
+        const along = horiz ? Math.abs(dx) : Math.abs(dy);
+        if (
+          across <= 14 &&
+          safeFire(me, ally, d) &&
+          firstObstacle(me, d, along)?.kind !== "steel"
+        ) {
           const ready = aim() === d;
           const shoot = ready && fireCooldown <= 0;
           if (shoot) fireCooldown = 6;
@@ -797,12 +814,6 @@ export function startBot(
     // довортов у чужого спавна, а базу сносили (полевой отчёт).
     const myLeash =
       Math.abs(me.x - BASE_CENTER.x) + Math.abs(me.y - BASE_CENTER.y);
-    const isBreach = (e: Enemy): boolean =>
-      e.y >= LOW_LANE_Y ||
-      (e.y >= BREACH_Y &&
-        Math.abs(e.x - BASE_CENTER.x) + Math.abs(e.y - BASE_CENTER.y) <=
-          BREACH_RADIUS);
-    const breachNow = enemies.some(isBreach);
     const atPost =
       Math.abs(me.x - ANCHOR.x) <= HOME_RADIUS &&
       Math.abs(me.y - ANCHOR.y) <= HOME_RADIUS;
