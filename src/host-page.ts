@@ -14,6 +14,7 @@ import { ms } from "./bench";
 import { setupChatPanel } from "./chat-ui";
 import { VoiceHub } from "./voice";
 import { startBot, type Bot } from "./bot";
+import { loadNeuroBot } from "./neurobot";
 import { renderSVG } from "uqr";
 
 const screenPick = $("screen-pick");
@@ -106,6 +107,8 @@ const preferredRoom = query.get("room") ?? undefined;
 const tvMode = query.get("tv") === "1";
 // ?botdebug=1 — показывать в HUD режим решения бота (полевые отчёты).
 const botDebug = query.get("botdebug") === "1";
+// ?neurobot=1 — за P2 играет нейросеть вместо скриптового бота.
+const neuroBot = query.get("neurobot") === "1";
 if (tvMode) hostPlays = false;
 
 async function begin(
@@ -220,6 +223,19 @@ async function begin(
     // живые игроки, он целился бы в них. До адаптации — выключен.
     botBtn.disabled = true;
     botBtn.title = "Bot is not adapted to the 4-player hack yet";
+  } else if (neuroBot) {
+    // ?neurobot=1 — за P2 играет обученная сеть (модель лежит рядом с ромами).
+    loadNeuroBot(engine.nes, (mask) => engine?.setButtons(2, mask), "/models/neurobot.json")
+      .then((nb) => {
+        bot = nb;
+        bot.pause();
+        botBtn.disabled = false;
+        botBtn.title = "Neural bot";
+        syncBot();
+      })
+      .catch((err) => {
+        netStatus.textContent = `Neural bot failed to load: ${(err as Error).message}`;
+      });
   } else {
     // Бот стартует на паузе и включается кнопкой.
     bot = startBot(engine.nes, (mask) => engine?.setButtons(2, mask));
